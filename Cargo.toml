@@ -9,3 +9,7 @@ cpal = "0.17.1"
 ringbuf = "0.4.8"
 rubato = "1.0.1"
 symphonia = { version = "0.5.5", features = ["mp3"] }
+
+[dev-dependencies]
+dasp_signal = "0.11"
+image = "0.25.1"

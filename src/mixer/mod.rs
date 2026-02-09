@@ -5,10 +5,13 @@ mod types;
 pub(crate) use channel::Channel;
 pub(crate) use types::MixerTask;
 pub use types::{ChannelSource, MixerEvent};
- 
+
 use std::sync::{Arc, RwLock, mpsc};
 
-use crate::io::{decoders::SymphoniaDecoder, resamplers::RubatoResampler, sources::FileSource, time_stretchers::NoopTimeStretcher};
+use crate::io::{
+    decoders::Decoder, decoders::GeneratedDecoder, decoders::SymphoniaDecoder,
+    resamplers::RubatoResampler, sources::FileSource, time_stretchers::NoopTimeStretcher,
+};
 
 pub struct MixerSettings {
     buffer_size_ms: u64,
@@ -32,11 +35,14 @@ pub struct Mixer {
 }
 
 impl Mixer {
-
-    pub fn new(settings: Option<MixerSettings>, tx_event: mpsc::Sender<MixerEvent>) -> Self {        
+    pub fn new(settings: Option<MixerSettings>, tx_event: mpsc::Sender<MixerEvent>) -> Self {
         let settings = Arc::new(RwLock::new(settings.unwrap_or_default()));
         let tx_task = runner::Runner::new(settings.clone());
-        Self { tx_task, tx_event, settings }
+        Self {
+            tx_task,
+            tx_event,
+            settings,
+        }
     }
 
     pub fn setup(&self) {
@@ -48,18 +54,30 @@ impl Mixer {
     pub fn load_channel(&self, index: usize, source: ChannelSource) -> Result<(), String> {
         // TODO: add callback maybe (or only if function may fail)
 
-        let decoder = match source {
+        let decoder: Box<dyn Decoder> = match source {
             ChannelSource::File { path } => {
-                let source = FileSource::new(path).map_err(|err| "Error creating source".to_string())?;
-                let decoder = SymphoniaDecoder::new(Box::new(source)).map_err(|err| "Error creating decoder".to_string())?;
+                let source =
+                    FileSource::new(path).map_err(|err| "Error creating source".to_string())?;
+                let decoder = SymphoniaDecoder::new(Box::new(source))
+                    .map_err(|err| "Error creating decoder".to_string())?;
                 Box::new(decoder)
-            },
+            }
+            ChannelSource::GeneratedAudio {
+                sample_rate,
+                channels,
+                pattern,
+            } => Box::new(GeneratedDecoder::new(sample_rate, channels, pattern)),
         };
 
         let resampler = Box::new(RubatoResampler::new());
         let time_stretcher = Box::new(NoopTimeStretcher {});
 
-        let _ = self.tx_task.send(MixerTask::ChannelLoad { index, decoder, resampler, time_stretcher });
+        let _ = self.tx_task.send(MixerTask::ChannelLoad {
+            index,
+            decoder,
+            resampler,
+            time_stretcher,
+        });
         Ok(())
     }
 
