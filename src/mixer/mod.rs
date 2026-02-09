@@ -48,14 +48,13 @@ impl Mixer {
     pub fn load_channel(&self, index: usize, source: ChannelSource) -> Result<(), String> {
         // TODO: add callback maybe (or only if function may fail)
 
-        let source = match source {
+        let decoder = match source {
             ChannelSource::File { path } => {
-                FileSource::new(path).map_err(|err| "Error creating source".to_string())?
+                let source = FileSource::new(path).map_err(|err| "Error creating source".to_string())?;
+                let decoder = SymphoniaDecoder::new(Box::new(source)).map_err(|err| "Error creating decoder".to_string())?;
+                Box::new(decoder)
             },
         };
-        
-        let decoder = SymphoniaDecoder::new(Box::new(source)).map_err(|err| "Error creating decoder".to_string())?;
-        let decoder = Box::new(decoder);
 
         let resampler = Box::new(RubatoResampler::new());
         let time_stretcher = Box::new(NoopTimeStretcher {});
