@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 cpal = "0.17.1"
+pitch-detection = "0.3"
 ringbuf = "0.4.8"
 rubato = "1.0.1"
 symphonia = { version = "0.5.5", features = ["mp3"] }
