@@ -1,11 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::io::{
-    decoders::Decoder,
-    dsps::DspChain,
-    resamplers::{Resampler, ResamplerStatus},
-    time_stretchers::TimeStretcher,
-    types::StreamTime
+    analyzers::Analyzer, decoders::Decoder, dsps::DspChain, resamplers::{Resampler, ResamplerStatus}, time_stretchers::TimeStretcher, types::StreamTime
 };
 
 // TODO: variable ?
@@ -15,6 +11,7 @@ pub(crate) struct Stream {
     decoder: Box<dyn Decoder>,
     decoder_cache: VecDeque<f32>,
 
+    analyzers: Vec<Box<dyn Analyzer>>,
     pre_fx: DspChain,
     time_stretcher: Box<dyn TimeStretcher>,
     resampler: Box<dyn Resampler>,
@@ -45,6 +42,7 @@ impl Stream {
             decoder,
             decoder_cache: VecDeque::with_capacity(((sample_rate * channels as u32) as f32 * STREAM_CACHE_DURATION_SECONDS) as usize),
 
+            analyzers: Vec::new(),
             resampler: resampler,
             pre_fx: DspChain::new(),
             time_stretcher: time_stretcher,
@@ -77,6 +75,10 @@ impl Stream {
 
     pub fn volume_get(&self) -> f32 {
         self.volume
+    }
+
+    pub fn analyzers(&mut self) -> &mut Vec<Box<dyn Analyzer>> {
+        &mut self.analyzers
     }
 
     pub fn pre_fx_mut(&mut self) -> &mut DspChain {
@@ -157,6 +159,12 @@ impl Stream {
             Ok(frames) if frames > 0 => {
                 let samples = frames * self.decoder.channels();
                 
+                if !self.analyzers.is_empty() {
+                    for analyzer in &mut self.analyzers {
+                        let processed = analyzer.analyze(&temp[..samples], self.decoder.sample_rate(), self.decoder.channels());
+                    }
+                }
+
                 if !self.pre_fx.is_empty() {
                     let processed = self.pre_fx.process(&mut temp[..samples], self.decoder.sample_rate(), self.decoder.channels());
                 }
