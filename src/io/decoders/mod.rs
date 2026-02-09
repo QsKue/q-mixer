@@ -1,7 +1,9 @@
+#[cfg(debug_assertions)]
 mod generated;
 mod symphonia;
 
-pub use generated::{GeneratedDecoder, GeneratedWaveformPattern, WaveSegment, WaveformType};
+#[cfg(debug_assertions)]
+pub use generated::GeneratedDecoder;
 pub use symphonia::SymphoniaDecoder;
 
 // TODO: better error handling / refactor AI code

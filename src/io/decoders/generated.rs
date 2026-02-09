@@ -66,24 +66,6 @@ impl WaveSegment {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum GeneratedWaveformPattern {
-    Staircase {
-        notes_hz: Vec<f32>,
-        note_duration_secs: f32,
-        amplitude: f32,
-        waveform: WaveformType,
-        tuning_offset_cents: f32,
-    },
-    Custom {
-        segments: Vec<WaveSegment>,
-        tuning_offset_cents: f32,
-    },
-    Samples {
-        samples: Vec<f32>,
-    },
-}
-
 #[derive(Clone, Copy, Debug)]
 struct SegmentDescriptor {
     segment: WaveSegment,
@@ -109,7 +91,7 @@ pub struct GeneratedDecoder {
 }
 
 impl GeneratedDecoder {
-    fn from_samples(sample_rate: u32, channels: usize, samples: Vec<f32>) -> Self {
+    pub fn new(sample_rate: u32, channels: usize, samples: Vec<f32>) -> Self {
         let total_samples = Some(samples.len() as u64);
         Self {
             sample_rate,
@@ -124,66 +106,6 @@ impl GeneratedDecoder {
                 data: samples,
                 position: 0,
             }),
-        }
-    }
-
-    pub fn new(sample_rate: u32, channels: usize, pattern: GeneratedWaveformPattern) -> Self {
-        let (segments, tuning_offset_cents) = match pattern {
-            GeneratedWaveformPattern::Staircase {
-                notes_hz,
-                note_duration_secs,
-                amplitude,
-                waveform,
-                tuning_offset_cents,
-            } => (
-                notes_hz
-                    .into_iter()
-                    .map(|frequency_hz| {
-                        let mut segment = WaveSegment::new(frequency_hz, note_duration_secs);
-                        segment.amplitude = amplitude;
-                        segment.waveform = waveform;
-                        segment
-                    })
-                    .collect(),
-                tuning_offset_cents,
-            ),
-            GeneratedWaveformPattern::Custom {
-                segments,
-                tuning_offset_cents,
-            } => (segments, tuning_offset_cents),
-            GeneratedWaveformPattern::Samples { samples } => {
-                return Self::from_samples(sample_rate, channels, samples);
-            }
-        };
-
-        let mut descriptors = Vec::with_capacity(segments.len());
-        let mut start_frame = 0u64;
-        for segment in segments {
-            let frames = (segment.duration_secs.max(0.0) * sample_rate as f32).round() as u64;
-            let frames = frames.max(1);
-            let end_frame = start_frame.saturating_add(frames);
-            descriptors.push(SegmentDescriptor {
-                segment,
-                start_frame,
-                end_frame,
-            });
-            start_frame = end_frame;
-        }
-
-        let total_samples = Some(start_frame.saturating_mul(channels as u64));
-
-        let tuning_ratio = 2.0_f32.powf(tuning_offset_cents / 1200.0);
-
-        Self {
-            sample_rate,
-            channels,
-            total_samples,
-            segments: descriptors,
-            current_segment: 0,
-            position: 0,
-            eof: false,
-            tuning_ratio,
-            samples: None,
         }
     }
 

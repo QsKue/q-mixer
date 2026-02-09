@@ -1,34 +1,8 @@
-use std::{sync::mpsc, thread, time::Duration};
-
-use audio::io::decoders_gen::GeneratedWaveformPattern;
-use audio::mixer::{ChannelSource, Mixer};
 use dasp_signal::{self as signal, Signal};
-use image::{Rgb, RgbImage};
+use plotters::prelude::*;
 use std::f64::consts::TAU;
 
 const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: usize = 1;
-
-fn play_pattern(label: &str, pattern: GeneratedWaveformPattern) {
-    let (tx_event, _rx_event) = mpsc::channel();
-    let mixer = Mixer::new(None, tx_event);
-
-    mixer.setup();
-    mixer
-        .load_channel(
-            0,
-            ChannelSource::GeneratedAudio {
-                sample_rate: SAMPLE_RATE,
-                channels: CHANNELS,
-                pattern,
-            },
-        )
-        .unwrap();
-    mixer.play_channel(0);
-
-    println!("Playing {label} for 10 seconds...");
-    thread::sleep(Duration::from_secs(10));
-}
 
 fn render_signal<S>(mut signal: S, seconds: f32) -> Vec<f32>
 where
@@ -44,7 +18,7 @@ where
 
 struct NoteSeries {
     label: String,
-    color: Rgb<u8>,
+    color: RGBColor,
     freqs: Vec<f64>,
 }
 
@@ -71,8 +45,11 @@ fn save_note_graph_png(label: &str, series: &[NoteSeries], samples_len: usize) {
     }
     let width = 900usize;
     let height = 360usize;
-    let mut img = RgbImage::from_pixel(width as u32, height as u32, Rgb([255, 255, 255]));
-    let total = samples_len.max(1);
+    let filename = format!("target/note_graphs/{}.png", sanitize_label(label));
+    let _ = std::fs::create_dir_all("target/note_graphs");
+    let root = BitMapBackend::new(&filename, (width as u32, height as u32))
+        .into_drawing_area();
+    let _ = root.fill(&WHITE);
 
     let mut min_freq = f64::MAX;
     let mut max_freq = f64::MIN;
@@ -93,54 +70,68 @@ fn save_note_graph_png(label: &str, series: &[NoteSeries], samples_len: usize) {
     let max_freq = max_freq + padding;
     let range = (max_freq - min_freq).max(1.0);
 
+    let x_max = samples_len.saturating_sub(1).max(1) as i32;
+    let mut chart = ChartBuilder::on(&root)
+        .margin(12)
+        .x_label_area_size(32)
+        .y_label_area_size(48)
+        .build_cartesian_2d(0..x_max, min_freq..(min_freq + range))
+        .unwrap();
+    let _ = chart
+        .configure_mesh()
+        .x_desc("Sample")
+        .y_desc("Frequency (Hz)")
+        .draw();
+
+    let stride = (samples_len / width).max(1);
     for line in series {
-        let mut prev = None;
-        for x in 0..width {
-            let idx = x * total / width;
-            let freq = line.freqs.get(idx).copied().unwrap_or(0.0);
-            let y = if freq <= 0.0 {
-                height as i32 - 1
-            } else {
-                let norm = ((freq - min_freq) / range).clamp(0.0, 1.0);
-                ((height as f64 - 1.0) * (1.0 - norm)).round() as i32
-            };
-            if let Some((px, py)) = prev {
-                draw_line_colored(&mut img, px, py, x as i32, y, line.color);
-            }
-            prev = Some((x as i32, y));
-        }
+        let points = line
+            .freqs
+            .iter()
+            .enumerate()
+            .step_by(stride)
+            .filter(|(_, freq)| freq.is_finite() && **freq > 0.0)
+            .map(|(idx, freq)| (idx as i32, *freq));
+        let _ = chart.draw_series(LineSeries::new(points, &line.color));
     }
 
-    let filename = format!("target/note_graphs/{}.png", sanitize_label(label));
-    let _ = std::fs::create_dir_all("target/note_graphs");
-    let _ = img.save(&filename);
+    let _ = root.present();
 }
 
-fn draw_line_colored(img: &mut RgbImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgb<u8>) {
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-    let mut x = x0;
-    let mut y = y0;
-    loop {
-        if x >= 0 && y >= 0 && x < img.width() as i32 && y < img.height() as i32 {
-            img.put_pixel(x as u32, y as u32, color);
-        }
-        if x == x1 && y == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
-        }
+fn save_waveform_png(label: &str, samples: &[f32]) {
+    if samples.is_empty() {
+        return;
     }
+    let width = 900usize;
+    let height = 360usize;
+    let filename = format!("target/waveform_graphs/{}.png", sanitize_label(label));
+    let _ = std::fs::create_dir_all("target/waveform_graphs");
+    let root = BitMapBackend::new(&filename, (width as u32, height as u32))
+        .into_drawing_area();
+    let _ = root.fill(&WHITE);
+
+    let x_max = samples.len().saturating_sub(1).max(1) as i32;
+    let mut chart = ChartBuilder::on(&root)
+        .margin(12)
+        .x_label_area_size(32)
+        .y_label_area_size(48)
+        .build_cartesian_2d(0..x_max, -1.0f32..1.0f32)
+        .unwrap();
+    let _ = chart
+        .configure_mesh()
+        .x_desc("Sample")
+        .y_desc("Amplitude")
+        .draw();
+
+    let stride = (samples.len() / width).max(1);
+    let points = samples
+        .iter()
+        .enumerate()
+        .step_by(stride)
+        .map(|(idx, sample)| (idx as i32, sample.clamp(-1.0, 1.0)));
+    let _ = chart.draw_series(LineSeries::new(points, &RGBColor(30, 90, 200)));
+
+    let _ = root.present();
 }
 
 fn render_note_with_vibrato(
@@ -181,7 +172,7 @@ fn render_notes_with_vibrato(
         samples,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     }
@@ -191,16 +182,41 @@ fn push_constant_series(freqs: &mut Vec<f64>, freq: f64, samples: usize) {
     freqs.extend(std::iter::repeat(freq).take(samples));
 }
 
-fn play_pattern_with_graph(label: &str, graph: PatternGraph) {
+fn run_test(label: &str, graph: PatternGraph) {
     save_note_graph_png(label, &graph.series, graph.samples.len());
-    let pattern = GeneratedWaveformPattern::Samples {
-        samples: graph.samples,
-    };
-    play_pattern(label, pattern);
+    save_waveform_png(label, &graph.samples);
+    // play(graph.samples)    
+}
+
+fn play(samples: Vec<f32>) {
+    use std::sync::mpsc;
+    use audio::mixer::{ChannelSource, Mixer};
+
+    let (tx_event, _rx_event) = mpsc::channel();
+    let mixer = Mixer::new(None, tx_event);
+
+    mixer.setup();
+    mixer
+        .load_channel(
+            0,
+            ChannelSource::GeneratedAudio {
+                sample_rate: SAMPLE_RATE,
+                channels: 1,
+                samples,
+            },
+        )
+        .unwrap();
+    mixer.play_channel(0);
+
+    println!("Running test, press enter to exit");
+    let stdin = std::io::stdin();
+    for _line in std::io::BufRead::lines(stdin.lock()) {
+        break;
+    }
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_vocal_melisma() {
     let graph = render_notes_with_vibrato(
         &[
@@ -210,11 +226,12 @@ fn test_play_vocal_melisma() {
         5.5,
         0.03,
     );
-    play_pattern_with_graph("vocal melisma (gliss + vibrato)", graph);
+    let label = "vocal melisma (gliss + vibrato)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_instrument_arpeggio() {
     let notes = [
         130.81, 164.81, 196.0, 261.63, 329.63, 392.0, 523.25, 392.0, 329.63, 261.63,
@@ -231,15 +248,16 @@ fn test_play_instrument_arpeggio() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("instrument arpeggio (tremolo)", graph);
+    let label = "instrument arpeggio (tremolo)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_sustained_vibrato_line() {
     let graph = render_notes_with_vibrato(
         &[
@@ -249,46 +267,50 @@ fn test_play_sustained_vibrato_line() {
         6.2,
         0.09,
     );
-    play_pattern_with_graph("sustained wide vibrato line", graph);
+    let label = "sustained wide vibrato line";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_wide_glissando_sweep() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
+    let mut phase = 0.0;
     for i in 0..steps {
         let t = i as f64 / steps as f64;
         let freq = 110.0 + (880.0 - 110.0) * t;
-        let mut osc = signal::rate(SAMPLE_RATE as f64).const_hz(freq).saw();
-        data.push(osc.next() as f32);
+        let phase_delta = TAU * freq / SAMPLE_RATE as f64;
+        let sample = (phase / TAU) * 2.0 - 1.0;
+        phase = (phase + phase_delta) % TAU;
+        data.push(sample as f32);
         freqs.push(freq);
     }
     let graph = PatternGraph {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("wide glissando sweep", graph);
+    let label = "wide glissando sweep";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_drifted_swell() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
+    let mut phase = 0.0;
     for i in 0..steps {
         let t = i as f64 / steps as f64;
         let drift = 2.0_f64.powf((6.0 * t * 10.0) / 1200.0);
         let freq = 220.0 * drift;
-        let mut osc = signal::rate(SAMPLE_RATE as f64)
-            .const_hz(freq)
-            .sine();
+        let phase_delta = TAU * freq / SAMPLE_RATE as f64;
         let env = if t < 0.4 {
             t / 0.4
         } else if t > 0.8 {
@@ -296,22 +318,24 @@ fn test_play_drifted_swell() {
         } else {
             1.0
         };
-        data.push((osc.next() * env) as f32);
+        phase = (phase + phase_delta) % TAU;
+        data.push((phase.sin() * env) as f32);
         freqs.push(freq);
     }
     let graph = PatternGraph {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("drifted swell (exp drift + long attack)", graph);
+    let label = "drifted swell (exp drift + long attack)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_jitter_breathy() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
@@ -329,15 +353,16 @@ fn test_play_jitter_breathy() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("breathy jitter (inharmonic)", graph);
+    let label = "breathy jitter (inharmonic)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_harmonic_series_tilt() {
     let mut data = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
@@ -360,11 +385,11 @@ fn test_play_harmonic_series_tilt() {
     }
     let mut series = Vec::new();
     for (index, color) in [
-        Rgb([30, 30, 30]),
-        Rgb([90, 90, 90]),
-        Rgb([130, 130, 130]),
-        Rgb([170, 170, 170]),
-        Rgb([200, 200, 200]),
+        RGBColor(30, 90, 200),
+        RGBColor(50, 110, 220),
+        RGBColor(70, 130, 235),
+        RGBColor(90, 150, 245),
+        RGBColor(110, 170, 255),
     ]
     .iter()
     .enumerate()
@@ -379,11 +404,12 @@ fn test_play_harmonic_series_tilt() {
         });
     }
     let graph = PatternGraph { samples: data, series };
-    play_pattern_with_graph("harmonic series (spectral tilt)", graph);
+    let label = "harmonic series (spectral tilt)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_missing_fundamental() {
     let mut data = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
@@ -406,10 +432,10 @@ fn test_play_missing_fundamental() {
     }
     let mut series = Vec::new();
     for (index, color) in [
-        Rgb([90, 90, 90]),
-        Rgb([130, 130, 130]),
-        Rgb([170, 170, 170]),
-        Rgb([200, 200, 200]),
+        RGBColor(40, 100, 210),
+        RGBColor(60, 120, 225),
+        RGBColor(80, 140, 240),
+        RGBColor(100, 160, 255),
     ]
     .iter()
     .enumerate()
@@ -424,11 +450,12 @@ fn test_play_missing_fundamental() {
         });
     }
     let graph = PatternGraph { samples: data, series };
-    play_pattern_with_graph("missing fundamental", graph);
+    let label = "missing fundamental";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_octave_doubling() {
     let mut data = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
@@ -452,21 +479,22 @@ fn test_play_octave_doubling() {
         series: vec![
             NoteSeries {
                 label: "F0".to_string(),
-                color: Rgb([30, 30, 30]),
+                color: RGBColor(30, 90, 200),
                 freqs: base_freqs,
             },
             NoteSeries {
                 label: "F1".to_string(),
-                color: Rgb([140, 140, 140]),
+                color: RGBColor(80, 140, 240),
                 freqs: octave_freqs,
             },
         ],
     };
-    play_pattern_with_graph("octave doubling", graph);
+    let label = "octave doubling";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_polyphonic_cluster() {
     let mut data = Vec::new();
     let steps = (SAMPLE_RATE * 10) as usize;
@@ -488,18 +516,20 @@ fn test_play_polyphonic_cluster() {
     for (index, freq) in freqs.iter().enumerate() {
         let mut line = Vec::with_capacity(steps);
         push_constant_series(&mut line, *freq, steps);
+        let color_shift = (index as u8) * 35;
         series.push(NoteSeries {
             label: format!("N{}", index + 1),
-            color: Rgb([30 + (index as u8 * 40), 30, 30]),
+            color: RGBColor(30, 90 + color_shift, 200),
             freqs: line,
         });
     }
     let graph = PatternGraph { samples: data, series };
-    play_pattern_with_graph("polyphonic cluster", graph);
+    let label = "polyphonic cluster";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_chromatic_passing_tones() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
@@ -517,15 +547,16 @@ fn test_play_chromatic_passing_tones() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("chromatic passing tones", graph);
+    let label = "chromatic passing tones";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_parallel_key_modulation() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
@@ -549,15 +580,16 @@ fn test_play_parallel_key_modulation() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("parallel key modulation (C major to C minor)", graph);
+    let label = "parallel key modulation (C major to C minor)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_relative_key_modulation() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
@@ -581,15 +613,16 @@ fn test_play_relative_key_modulation() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("relative key modulation (C major to A minor)", graph);
+    let label = "relative key modulation (C major to A minor)";
+    run_test(label, graph);
 }
 
 #[test]
-#[ignore = "manual listening test"]
+#[ignore]
 fn test_play_percussive_sequence() {
     let mut data = Vec::new();
     let mut freqs = Vec::new();
@@ -614,9 +647,10 @@ fn test_play_percussive_sequence() {
         samples: data,
         series: vec![NoteSeries {
             label: "main".to_string(),
-            color: Rgb([30, 30, 30]),
+            color: RGBColor(30, 90, 200),
             freqs,
         }],
     };
-    play_pattern_with_graph("percussive transients", graph);
+    let label = "percussive transients";
+    run_test(label, graph);
 }
