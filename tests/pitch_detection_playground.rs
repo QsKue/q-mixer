@@ -6,9 +6,60 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use audio::io::analyzers::pitch_detector::McleodPitchDetectorAnalyzer;
+use audio::io::analyzers::pitch_detector::{
+    McleodPitchDetectorAnalyzer, PyinPitchDetectorAnalyzer,
+};
 
 const SAMPLE_RATE: u32 = 44_100;
+
+#[derive(Copy, Clone, Debug)]
+enum PitchAlgorithm {
+    Mcleod,
+    Pyin,
+}
+
+const PLAYGROUND_ALGORITHMS: &[PitchAlgorithm] = &[PitchAlgorithm::Mcleod, PitchAlgorithm::Pyin];
+
+trait PlaygroundPitchAnalyzer: Analyzer {
+    fn set_min_interval(&mut self, interval: Duration);
+    fn detected_note(&self) -> Option<i32>;
+    fn detected_key(&self) -> Option<String>;
+}
+
+impl PlaygroundPitchAnalyzer for McleodPitchDetectorAnalyzer {
+    fn set_min_interval(&mut self, interval: Duration) {
+        McleodPitchDetectorAnalyzer::set_min_interval(self, interval);
+    }
+
+    fn detected_note(&self) -> Option<i32> {
+        McleodPitchDetectorAnalyzer::detected_note(self)
+    }
+
+    fn detected_key(&self) -> Option<String> {
+        McleodPitchDetectorAnalyzer::detected_key(self)
+    }
+}
+
+impl PlaygroundPitchAnalyzer for PyinPitchDetectorAnalyzer {
+    fn set_min_interval(&mut self, interval: Duration) {
+        PyinPitchDetectorAnalyzer::set_min_interval(self, interval);
+    }
+
+    fn detected_note(&self) -> Option<i32> {
+        PyinPitchDetectorAnalyzer::detected_note(self)
+    }
+
+    fn detected_key(&self) -> Option<String> {
+        PyinPitchDetectorAnalyzer::detected_key(self)
+    }
+}
+
+fn create_analyzer(algorithm: PitchAlgorithm) -> Box<dyn PlaygroundPitchAnalyzer> {
+    match algorithm {
+        PitchAlgorithm::Mcleod => Box::new(McleodPitchDetectorAnalyzer::new()),
+        PitchAlgorithm::Pyin => Box::new(PyinPitchDetectorAnalyzer::new()),
+    }
+}
 
 fn render_signal<S>(mut signal: S, seconds: f32) -> Vec<f32>
 where
@@ -53,8 +104,8 @@ fn render_notes_with_vibrato(
     samples
 }
 
-fn analyze_samples(samples: &[f32]) -> Option<String> {
-    let mut analyzer = McleodPitchDetectorAnalyzer::new();
+fn analyze_samples(samples: &[f32], algorithm: PitchAlgorithm) -> Option<String> {
+    let mut analyzer = create_analyzer(algorithm);
     analyzer.set_min_interval(Duration::from_millis(0));
     for chunk in samples.chunks(1024) {
         analyzer.analyze(chunk, SAMPLE_RATE, 1);
@@ -88,25 +139,30 @@ fn expected_midi_from_hz(freq_hz: f64) -> i32 {
     midi.round() as i32
 }
 
-fn log_detected_key(samples: &[f32], label: &str, expected_hint: &str) {
-    let detected = analyze_samples(samples);
+fn log_detected_key(samples: &[f32], label: &str, expected_hint: &str, algorithm: PitchAlgorithm) {
+    let detected = analyze_samples(samples, algorithm);
     println!(
-        "[{label}] expected hint: {expected_hint}, detected: {}",
+        "[{label}][{algorithm:?}] expected hint: {expected_hint}, detected: {}",
         detected.as_deref().unwrap_or("<none>")
     );
 }
 
-fn log_detected_key_options(samples: &[f32], label: &str, expected_options: &[&str]) {
-    let detected = analyze_samples(samples);
+fn log_detected_key_options(
+    samples: &[f32],
+    label: &str,
+    expected_options: &[&str],
+    algorithm: PitchAlgorithm,
+) {
+    let detected = analyze_samples(samples, algorithm);
     println!(
-        "[{label}] expected options: {:?}, detected: {}",
+        "[{label}][{algorithm:?}] expected options: {:?}, detected: {}",
         expected_options,
         detected.as_deref().unwrap_or("<none>")
     );
 }
 
-fn collect_detected_notes(samples: &[f32]) -> Vec<(f32, i32)> {
-    let mut analyzer = McleodPitchDetectorAnalyzer::new();
+fn collect_detected_notes(samples: &[f32], algorithm: PitchAlgorithm) -> Vec<(f32, i32)> {
+    let mut analyzer = create_analyzer(algorithm);
     analyzer.set_min_interval(Duration::from_millis(0));
     let mut detected = Vec::new();
     let mut last_note = None;
@@ -260,13 +316,15 @@ fn playground_vocal_melisma() {
     ];
     let samples = render_notes_with_vibrato(&notes, 1.0, 5.5, 0.03);
     let expected = expected_key_from_hz(*notes.last().unwrap());
-    log_detected_key(&samples, "vocal_melisma", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&samples, "vocal_melisma", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = notes
         .iter()
         .enumerate()
         .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
         .collect();
-    let detected_events = collect_detected_notes(&samples);
+    let detected_events = collect_detected_notes(&samples, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("vocal_melisma.png"),
         "Vocal melisma",
@@ -290,13 +348,15 @@ fn playground_instrument_arpeggio() {
         data.extend(segment);
     }
     let expected = expected_key_from_hz(*notes.last().unwrap());
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = notes
         .iter()
         .enumerate()
         .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
         .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("instrument_arpeggio.png"),
         "Instrument arpeggio",
@@ -315,13 +375,15 @@ fn playground_sustained_vibrato_line() {
     ];
     let samples = render_notes_with_vibrato(&notes, 1.0, 6.2, 0.09);
     let expected = expected_key_from_hz(*notes.last().unwrap());
-    log_detected_key(&samples, "vocal_melisma", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&samples, "vocal_melisma", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = notes
         .iter()
         .enumerate()
         .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
         .collect();
-    let detected_events = collect_detected_notes(&samples);
+    let detected_events = collect_detected_notes(&samples, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("sustained_vibrato.png"),
         "Sustained vibrato line",
@@ -347,9 +409,11 @@ fn playground_wide_glissando_sweep() {
         data.push(sample as f32);
     }
     let expected = expected_key_from_hz(880.0);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events = vec![(0.0, expected_midi_from_hz(880.0))];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("wide_glissando.png"),
         "Wide glissando sweep",
@@ -382,12 +446,14 @@ fn playground_drifted_swell() {
         data.push((phase.sin() * env) as f32);
     }
     let expected = expected_key_from_hz(220.0 * 2.0_f64.powf((6.0 * 10.0) / 1200.0));
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events = vec![(
         0.0,
         expected_midi_from_hz(220.0 * 2.0_f64.powf((6.0 * 10.0) / 1200.0)),
     )];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("drifted_swell.png"),
         "Drifted swell",
@@ -411,9 +477,11 @@ fn playground_jitter_breathy() {
         phase = (phase + TAU * freq / SAMPLE_RATE as f64) % TAU;
         data.push((phase.sin() * 0.8) as f32);
     }
-    log_detected_key_options(&data, "playground", &["G3", "A3", "F#3"]);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key_options(&data, "playground", &["G3", "A3", "F#3"], algorithm);
+    }
     let expected_events = vec![(0.0, expected_midi_from_hz(196.0))];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("jitter_breathy.png"),
         "Jitter breathy",
@@ -447,9 +515,11 @@ fn playground_harmonic_series_tilt() {
         data.push(sample as f32);
     }
     let expected = expected_key_from_hz(base_freq);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events = vec![(0.0, expected_midi_from_hz(base_freq))];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("harmonic_series_tilt.png"),
         "Harmonic series tilt",
@@ -483,9 +553,11 @@ fn playground_missing_fundamental() {
         data.push(sample as f32);
     }
     let expected = expected_key_from_hz(base_freq);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events = vec![(0.0, expected_midi_from_hz(base_freq))];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("missing_fundamental.png"),
         "Missing fundamental",
@@ -511,9 +583,11 @@ fn playground_octave_doubling() {
         data.push((base.next() + octave.next() * 0.6) as f32);
     }
     let expected = expected_key_from_hz(base_freq);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events = vec![(0.0, expected_midi_from_hz(base_freq))];
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("octave_doubling.png"),
         "Octave doubling",
@@ -543,13 +617,15 @@ fn playground_polyphonic_cluster() {
         }
         data.push(sample as f32);
     }
-    log_detected_key_options(&data, "playground", &["C4", "C#4", "D4", "D#4"]);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key_options(&data, "playground", &["C4", "C#4", "D4", "D#4"], algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = freqs
         .iter()
         .enumerate()
         .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
         .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("polyphonic_cluster.png"),
         "Polyphonic cluster",
@@ -573,13 +649,15 @@ fn playground_chromatic_passing_tones() {
         data.extend(segment);
     }
     let expected = expected_key_from_hz(*notes.last().unwrap());
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = notes
         .iter()
         .enumerate()
         .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
         .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("chromatic_passing_tones.png"),
         "Chromatic passing tones",
@@ -603,7 +681,9 @@ fn playground_parallel_key_modulation() {
         data.extend(segment);
     }
     let expected = expected_key_from_hz(392.0);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = [
         261.63, 329.63, 392.0, 523.25, 392.0, 261.63, 311.13, 392.0, 493.88, 392.0,
     ]
@@ -611,7 +691,7 @@ fn playground_parallel_key_modulation() {
     .enumerate()
     .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
     .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("parallel_key_modulation.png"),
         "Parallel key modulation",
@@ -635,7 +715,9 @@ fn playground_relative_key_modulation() {
         data.extend(segment);
     }
     let expected = expected_key_from_hz(329.63);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = [
         261.63, 329.63, 392.0, 523.25, 392.0, 220.0, 261.63, 329.63, 440.0, 329.63,
     ]
@@ -643,7 +725,7 @@ fn playground_relative_key_modulation() {
     .enumerate()
     .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
     .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("relative_key_modulation.png"),
         "Relative key modulation",
@@ -675,7 +757,9 @@ fn playground_percussive_sequence() {
         }
     }
     let expected = expected_key_from_hz(392.0);
-    log_detected_key(&data, "playground", &expected);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        log_detected_key(&data, "playground", &expected, algorithm);
+    }
     let expected_events: Vec<(f32, i32)> = [
         196.0, 220.0, 246.94, 261.63, 293.66, 329.63, 349.23, 392.0, 440.0, 392.0,
     ]
@@ -683,7 +767,7 @@ fn playground_percussive_sequence() {
     .enumerate()
     .map(|(idx, &note)| (idx as f32, expected_midi_from_hz(note)))
     .collect();
-    let detected_events = collect_detected_notes(&data);
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
     plot_note_events_overlay(
         plot_path("percussive_sequence.png"),
         "Percussive sequence",
@@ -712,9 +796,17 @@ fn test_generated_note_order_and_plots() {
         .iter()
         .map(|&freq| expected_midi_from_hz(freq))
         .collect();
-    let detected_events = collect_detected_notes(&data);
-    let detected_midi: Vec<i32> = detected_events.iter().map(|(_, note)| *note).collect();
-    log_notes_in_order("playground", &expected_midi, &detected_midi);
+    for &algorithm in PLAYGROUND_ALGORITHMS {
+        let detected_events = collect_detected_notes(&data, algorithm);
+        let detected_midi: Vec<i32> = detected_events.iter().map(|(_, note)| *note).collect();
+        log_notes_in_order(
+            &format!("playground::{algorithm:?}"),
+            &expected_midi,
+            &detected_midi,
+        );
+    }
+
+    let detected_events = collect_detected_notes(&data, PitchAlgorithm::Mcleod);
 
     let expected_events: Vec<(f32, i32)> = expected_midi
         .iter()
