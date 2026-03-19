@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use crate::io::analyzers::Analyzer;
 
-pub struct PitchAnalyzer {
+// Uses Bitstream Autocorrelation Function
+pub struct BCFPitchDetector {
     ring: Vec<f64>,
     ring_pos: usize,
     filled: usize,
@@ -22,7 +23,7 @@ pub struct PitchAnalyzer {
     last_note: Option<i32>,
 }
 
-impl PitchAnalyzer {
+impl BCFPitchDetector {
     pub fn new() -> Self {
         Self {
             ring: Vec::new(),
@@ -126,13 +127,13 @@ impl PitchAnalyzer {
     }
 }
 
-impl Default for PitchAnalyzer {
+impl Default for BCFPitchDetector {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Analyzer for PitchAnalyzer {
+impl Analyzer for BCFPitchDetector {
     fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;

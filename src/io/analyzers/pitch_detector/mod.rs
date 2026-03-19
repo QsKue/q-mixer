@@ -1,5 +1,5 @@
 mod mcleod;
 mod pitch;
 
-pub use mcleod::McleodPitchDetectorAnalyzer;
-pub use pitch::PitchAnalyzer;
+pub use mcleod::McleodPitchDetector;
+pub use pitch::BCFPitchDetector;

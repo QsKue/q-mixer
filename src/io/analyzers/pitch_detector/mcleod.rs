@@ -4,7 +4,7 @@ use crate::io::analyzers::Analyzer;
 use pitch_detection::detector::PitchDetector;
 use pitch_detection::detector::mcleod::McLeodDetector;
 
-pub struct McleodPitchDetectorAnalyzer {
+pub struct McleodPitchDetector {
     ring: Vec<f32>,
     ring_pos: usize,
     filled: usize,
@@ -28,7 +28,7 @@ pub struct McleodPitchDetectorAnalyzer {
     last_note: Option<i32>,
 }
 
-impl McleodPitchDetectorAnalyzer {
+impl McleodPitchDetector {
     pub fn new() -> Self {
         Self {
             ring: Vec::new(),
@@ -137,7 +137,7 @@ impl McleodPitchDetectorAnalyzer {
     }
 }
 
-impl Analyzer for McleodPitchDetectorAnalyzer {
+impl Analyzer for McleodPitchDetector {
     fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;
