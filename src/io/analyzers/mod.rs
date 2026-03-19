@@ -6,18 +6,9 @@ pub mod pitch_detector;
 /// audio buffer directly.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnalysisEvent {
-    Pitch {
-        midi: i32,
-        hz: f32,
-        confidence: f32,
-    },
-    Onset {
-        strength: f32,
-    },
-    Beat {
-        bpm: f32,
-        phase: f32,
-    },
+    Pitch { midi: i32, hz: f32, confidence: f32 },
+    Onset { strength: f32 },
+    Beat { bpm: f32, phase: f32 },
 }
 
 pub trait Analyzer {

@@ -1,4 +1,5 @@
 pub mod analyzers;
+pub mod control;
 pub(crate) mod decoders;
 pub mod dsps;
 pub(crate) mod resamplers;

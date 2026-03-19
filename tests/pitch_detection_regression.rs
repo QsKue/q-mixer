@@ -41,8 +41,10 @@ fn collect_frame_pitches(samples: &[f32], chunk_size: usize) -> Vec<FramePitch> 
 
     let mut frames = Vec::new();
     let mut processed = 0usize;
+    let mut analysis_events = Vec::new();
     for chunk in samples.chunks(chunk_size) {
-        analyzer.analyze(chunk, SAMPLE_RATE, 1);
+        analyzer.analyze(chunk, SAMPLE_RATE, 1, &mut analysis_events);
+        analysis_events.clear();
         processed += chunk.len();
         frames.push(FramePitch {
             time_s: processed as f32 / SAMPLE_RATE as f32,

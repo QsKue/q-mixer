@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use crate::io::{
     analyzers::{AnalysisEvent, Analyzer},
+    control::{ControlCommand, Controller, DspTarget},
     decoders::Decoder,
     dsps::DspChain,
     resamplers::{Resampler, ResamplerStatus},
@@ -18,6 +19,8 @@ pub(crate) struct Stream {
 
     analyzers: Vec<Box<dyn Analyzer>>,
     analyzer_events: Vec<AnalysisEvent>,
+    control: Controller,
+    control_commands: Vec<ControlCommand>,
     pre_fx: DspChain,
     time_stretcher: Box<dyn TimeStretcher>,
     resampler: Box<dyn Resampler>,
@@ -50,6 +53,8 @@ impl Stream {
 
             analyzers: Vec::new(),
             analyzer_events: Vec::new(),
+            control: Controller::new(),
+            control_commands: Vec::new(),
             resampler: resampler,
             pre_fx: DspChain::new(),
             time_stretcher: time_stretcher,
@@ -177,41 +182,64 @@ impl Stream {
     fn decode_more_input(&mut self) -> bool {
         let mut temp = vec![0.0; 4096];
 
-        // this as well, also we need to account for length processed
         match self.decoder.decode(&mut temp) {
             Ok(frames) if frames > 0 => {
-                let samples = frames * self.decoder.channels();
+                let sample_rate = self.decoder.sample_rate();
+                let channels = self.decoder.channels();
+                let samples = frames * channels;
 
+                let chunk_event_start = self.analyzer_events.len();
                 if !self.analyzers.is_empty() {
                     for analyzer in &mut self.analyzers {
                         analyzer.analyze(
                             &temp[..samples],
-                            self.decoder.sample_rate(),
-                            self.decoder.channels(),
+                            sample_rate,
+                            channels,
                             &mut self.analyzer_events,
                         );
                     }
                 }
 
+                let chunk_events = &self.analyzer_events[chunk_event_start..];
+                self.control.route(chunk_events, &mut self.control_commands);
+                self.apply_control_commands();
+
                 if !self.pre_fx.is_empty() {
-                    let processed = self.pre_fx.process(
-                        &mut temp[..samples],
-                        self.decoder.sample_rate(),
-                        self.decoder.channels(),
-                    );
+                    self.pre_fx
+                        .process(&mut temp[..samples], sample_rate, channels);
                 }
 
-                let stretched = self.time_stretcher.process(
-                    &mut temp[..samples],
-                    self.decoder.sample_rate(),
-                    self.decoder.channels(),
-                );
+                self.time_stretcher
+                    .process(&mut temp[..samples], sample_rate, channels);
 
-                self.decoder_cache.extend(temp[..samples].to_vec());
+                self.decoder_cache.extend(temp[..samples].iter().copied());
 
                 true
             }
             _ => false,
+        }
+    }
+
+    fn apply_control_commands(&mut self) {
+        for command in &self.control_commands {
+            match *command {
+                ControlCommand::SetTimeStretchPitchSemitones(pitch_semitones) => {
+                    let speed = self.time_stretcher.speed();
+                    self.time_stretcher.set_params(speed, pitch_semitones);
+                }
+                ControlCommand::SetSpeed(speed) => {
+                    let pitch = self.time_stretcher.pitch_semitones();
+                    self.time_stretcher.set_params(speed, pitch);
+                }
+                ControlCommand::SetDspParam { target, id, value } => match target {
+                    DspTarget::PreFx => {
+                        let _ = self.pre_fx.set_param(id, value);
+                    }
+                    DspTarget::PostFx => {
+                        let _ = self.post_fx.set_param(id, value);
+                    }
+                },
+            }
         }
     }
 }
