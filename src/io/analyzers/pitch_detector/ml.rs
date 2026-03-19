@@ -61,6 +61,7 @@ pub struct OnnxRawOutput {
 #[derive(Debug, Clone)]
 pub enum OnnxPrimaryInput {
     Waveform1D,
+    FramedWaveform { frame_size: usize },
     MelSpectrogram { bins: usize },
 }
 
@@ -118,16 +119,19 @@ impl OnnxModelParams {
     pub fn for_crepe(model_path: impl Into<String>) -> Self {
         Self {
             model_path: model_path.into(),
-            input_tensor_name: "input".to_string(),
-            f0_output_tensor_name: "pitch".to_string(),
-            confidence_output_tensor_name: Some("confidence".to_string()),
+            input_tensor_name: "frames".to_string(),
+            f0_output_tensor_name: "logits".to_string(),
+            confidence_output_tensor_name: None,
             expected_sample_rate: 16_000,
             expected_window_size: 1024,
             hop_size: 160,
-            model_min_freq: 50.0,
+            model_min_freq: 32.7,
             model_max_freq: 2_000.0,
-            output_kind: OnnxOutputKind::DirectHz,
-            primary_input: OnnxPrimaryInput::Waveform1D,
+            output_kind: OnnxOutputKind::CentsBinLogits {
+                min_hz: 32.703_197,
+                bins_per_octave: 60.0,
+            },
+            primary_input: OnnxPrimaryInput::FramedWaveform { frame_size: 1024 },
             aux_scalar_inputs: Vec::new(),
         }
     }
@@ -273,6 +277,33 @@ impl OnnxMlPitchEngine {
         Some(out)
     }
 
+    fn frame_waveform(
+        input: &[f32],
+        frame_size: usize,
+        hop_size: usize,
+    ) -> Option<(Vec<f32>, usize)> {
+        if input.is_empty() || frame_size == 0 {
+            return None;
+        }
+
+        let hop = hop_size.max(1);
+        if input.len() <= frame_size {
+            let mut framed = vec![0.0f32; frame_size];
+            let start = frame_size - input.len();
+            framed[start..].copy_from_slice(input);
+            return Some((framed, 1));
+        }
+
+        let frames = ((input.len() - frame_size) / hop) + 1;
+        let mut out = Vec::with_capacity(frames * frame_size);
+        for frame_idx in 0..frames {
+            let start = frame_idx * hop;
+            let end = start + frame_size;
+            out.extend_from_slice(&input[start..end]);
+        }
+        Some((out, frames))
+    }
+
     fn decode_output(params: &OnnxModelParams, raw: OnnxRawOutput) -> Option<MlPitchEstimate> {
         let confidence = raw
             .confidence
@@ -330,6 +361,14 @@ impl OnnxMlPitchEngine {
                 let data = Self::resample_to_model_window(mono_window, source_sample_rate, params)?;
                 let shape = vec![1, data.len()];
                 (data, shape)
+            }
+            OnnxPrimaryInput::FramedWaveform { frame_size } => {
+                let resampled =
+                    Self::resample_to_model_window(mono_window, source_sample_rate, params)?;
+                let (frames_data, frame_count) =
+                    Self::frame_waveform(&resampled, frame_size, params.hop_size)?;
+                let shape = vec![frame_count, frame_size];
+                (frames_data, shape)
             }
             OnnxPrimaryInput::MelSpectrogram { bins } => {
                 let provider = self.feature_provider.as_mut()?;
