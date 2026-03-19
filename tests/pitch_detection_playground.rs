@@ -1,3 +1,5 @@
+mod pitch_detection_fixtures;
+
 use audio::io::analyzers::Analyzer;
 use dasp_signal::{self as signal, Signal};
 use plotters::prelude::*;
@@ -6,55 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use audio::io::analyzers::pitch_detector::McleodPitchDetectorAnalyzer;
-
-const SAMPLE_RATE: u32 = 44_100;
-
-fn render_signal<S>(mut signal: S, seconds: f32) -> Vec<f32>
-where
-    S: Signal<Frame = f64>,
-{
-    let samples = (SAMPLE_RATE as f32 * seconds) as usize;
-    let mut data = Vec::with_capacity(samples);
-    for _ in 0..samples {
-        data.push(signal.next() as f32);
-    }
-    data
-}
-
-fn triangle_hz(hz: f64) -> impl Signal<Frame = f64> {
-    let phase = signal::phase(signal::rate(SAMPLE_RATE as f64).const_hz(hz));
-    phase.map(|p| 1.0 - 4.0 * (p - 0.5).abs())
-}
-
-fn render_note_with_vibrato(base_hz: f64, note_secs: f32, vibrato_hz: f64, depth: f64) -> Vec<f32> {
-    let samples = (SAMPLE_RATE as f32 * note_secs) as usize;
-    let mut data = Vec::with_capacity(samples);
-    let mut lfo = signal::rate(SAMPLE_RATE as f64).const_hz(vibrato_hz).sine();
-    let mut phase = 0.0;
-    for _ in 0..samples {
-        let hz = base_hz * (1.0 + lfo.next() * depth);
-        phase = (phase + TAU * hz / SAMPLE_RATE as f64) % TAU;
-        data.push(phase.sin() as f32);
-    }
-    data
-}
-
-fn render_notes_with_vibrato(
-    notes: &[f64],
-    note_secs: f32,
-    vibrato_hz: f64,
-    depth: f64,
-) -> Vec<f32> {
-    let mut samples = Vec::new();
-    for &note in notes {
-        samples.extend(render_note_with_vibrato(note, note_secs, vibrato_hz, depth));
-    }
-    samples
-}
+use audio::io::analyzers::pitch_detector::McleodPitchDetector;
+use pitch_detection_fixtures::{
+    SAMPLE_RATE, render_notes_with_vibrato, render_signal, triangle_hz,
+};
 
 fn analyze_samples(samples: &[f32]) -> Option<String> {
-    let mut analyzer = McleodPitchDetectorAnalyzer::new();
+    let mut analyzer = McleodPitchDetector::new();
     analyzer.set_min_interval(Duration::from_millis(0));
     for chunk in samples.chunks(1024) {
         analyzer.analyze(chunk, SAMPLE_RATE, 1);
@@ -106,7 +66,7 @@ fn log_detected_key_options(samples: &[f32], label: &str, expected_options: &[&s
 }
 
 fn collect_detected_notes(samples: &[f32]) -> Vec<(f32, i32)> {
-    let mut analyzer = McleodPitchDetectorAnalyzer::new();
+    let mut analyzer = McleodPitchDetector::new();
     analyzer.set_min_interval(Duration::from_millis(0));
     let mut detected = Vec::new();
     let mut last_note = None;
