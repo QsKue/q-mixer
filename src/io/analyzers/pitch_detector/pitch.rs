@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::io::analyzers::Analyzer;
+use crate::io::analyzers::{AnalysisEvent, Analyzer};
 
 // Uses Bitstream Autocorrelation Function
 pub struct BCFPitchDetector {
@@ -134,7 +134,13 @@ impl Default for BCFPitchDetector {
 }
 
 impl Analyzer for BCFPitchDetector {
-    fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
+    fn analyze(
+        &mut self,
+        input: &[f32],
+        sample_rate: u32,
+        channels: usize,
+        out_events: &mut Vec<AnalysisEvent>,
+    ) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;
         }
@@ -166,7 +172,7 @@ impl Analyzer for BCFPitchDetector {
 
         Self::read_last_into_from_ring(&self.ring, self.ring_pos, &mut self.window_buf);
 
-        let (detected_hz, _) = pitch::detect(&self.window_buf);
+        let (detected_hz, confidence) = pitch::detect(&self.window_buf);
         if !(detected_hz.is_finite() && detected_hz > 0.0) {
             return;
         }
@@ -180,6 +186,12 @@ impl Analyzer for BCFPitchDetector {
             return;
         };
 
-        self.last_note = Some(midi.round() as i32);
+        let rounded_midi = midi.round() as i32;
+        self.last_note = Some(rounded_midi);
+        out_events.push(AnalysisEvent::Pitch {
+            midi: rounded_midi,
+            hz: f0 as f32,
+            confidence: confidence as f32,
+        });
     }
 }
