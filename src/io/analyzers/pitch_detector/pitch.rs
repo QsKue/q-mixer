@@ -1,11 +1,10 @@
 use std::time::{Duration, Instant};
 
 use crate::io::analyzers::Analyzer;
-use pitch_detection::detector::PitchDetector;
-use pitch_detection::detector::mcleod::McLeodDetector;
 
-pub struct McleodPitchDetector {
-    ring: Vec<f32>,
+// Uses Bitstream Autocorrelation Function
+pub struct BCFPitchDetector {
+    ring: Vec<f64>,
     ring_pos: usize,
     filled: usize,
 
@@ -16,19 +15,15 @@ pub struct McleodPitchDetector {
     min_interval: Duration,
     last_update: Instant,
 
-    min_freq: f32,
-    max_freq: f32,
+    min_freq: f64,
+    max_freq: f64,
 
-    power_threshold: f32,
-    clarity_threshold: f32,
-
-    window_buf: Vec<f32>,
-    detector: Option<McLeodDetector<f32>>,
+    window_buf: Vec<f64>,
 
     last_note: Option<i32>,
 }
 
-impl McleodPitchDetector {
+impl BCFPitchDetector {
     pub fn new() -> Self {
         Self {
             ring: Vec::new(),
@@ -41,11 +36,8 @@ impl McleodPitchDetector {
             min_interval: Duration::from_millis(10),
             last_update: Instant::now(),
             min_freq: 80.0,
-            max_freq: 1000.0,
-            power_threshold: 5e-4,
-            clarity_threshold: 0.7,
+            max_freq: 1_000.0,
             window_buf: Vec::new(),
-            detector: None,
             last_note: None,
         }
     }
@@ -72,7 +64,7 @@ impl McleodPitchDetector {
         }
 
         self.sample_rate = sample_rate;
-        self.window = if sample_rate >= 44_100 { 1024 } else { 512 };
+        self.window = if sample_rate >= 44_100 { 2_048 } else { 1_024 };
         self.hop = (sample_rate as usize / 200).max(64);
 
         let ring_len = (self.window * 2).max(self.window + 64);
@@ -81,15 +73,13 @@ impl McleodPitchDetector {
         self.filled = 0;
 
         self.window_buf.resize(self.window, 0.0);
-        let padding = self.window / 2;
-        self.detector = Some(McLeodDetector::new(self.window, padding));
 
         self.samples_since_update = 0;
         self.last_update = Instant::now();
         self.last_note = None;
     }
 
-    fn push_mono_sample(&mut self, sample: f32) {
+    fn push_mono_sample(&mut self, sample: f64) {
         if self.ring.is_empty() {
             return;
         }
@@ -98,7 +88,7 @@ impl McleodPitchDetector {
         self.filled = self.filled.saturating_add(1).min(self.ring.len());
     }
 
-    fn read_last_into_from_ring(ring: &[f32], ring_pos: usize, dst: &mut [f32]) {
+    fn read_last_into_from_ring(ring: &[f64], ring_pos: usize, dst: &mut [f64]) {
         let n = dst.len();
         let len = ring.len();
         if n == 0 || len == 0 || n > len {
@@ -120,7 +110,7 @@ impl McleodPitchDetector {
         }
     }
 
-    fn f0_to_midi(f0: f32) -> Option<f32> {
+    fn f0_to_midi(f0: f64) -> Option<f64> {
         if !(f0.is_finite() && f0 > 0.0) {
             return None;
         }
@@ -137,7 +127,13 @@ impl McleodPitchDetector {
     }
 }
 
-impl Analyzer for McleodPitchDetector {
+impl Default for BCFPitchDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Analyzer for BCFPitchDetector {
     fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;
@@ -151,11 +147,11 @@ impl Analyzer for McleodPitchDetector {
 
         for frame in 0..frames {
             let base = frame * channels;
-            let mut sum = 0.0f32;
+            let mut sum = 0.0f64;
             for ch in 0..channels {
-                sum += input[base + ch];
+                sum += input[base + ch] as f64;
             }
-            self.push_mono_sample(sum / channels as f32);
+            self.push_mono_sample(sum / channels as f64);
             self.samples_since_update += 1;
         }
 
@@ -170,21 +166,13 @@ impl Analyzer for McleodPitchDetector {
 
         Self::read_last_into_from_ring(&self.ring, self.ring_pos, &mut self.window_buf);
 
-        let Some(detector) = self.detector.as_mut() else {
+        let (detected_hz, _) = pitch::detect(&self.window_buf);
+        if !(detected_hz.is_finite() && detected_hz > 0.0) {
             return;
-        };
+        }
 
-        let Some(pitch) = detector.get_pitch(
-            &self.window_buf,
-            sample_rate as usize,
-            self.power_threshold,
-            self.clarity_threshold,
-        ) else {
-            return;
-        };
-
-        let f0 = pitch.frequency as f32;
-        if !(f0.is_finite() && f0 >= self.min_freq && f0 <= self.max_freq) {
+        let f0 = detected_hz * sample_rate as f64 / 48_000.0;
+        if !(f0 >= self.min_freq && f0 <= self.max_freq) {
             return;
         }
 
