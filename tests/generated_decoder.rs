@@ -205,17 +205,40 @@ fn plot_note_events_overlay<P: AsRef<Path>>(
         .draw()?;
 
     if !expected_points.is_empty() {
-        chart.draw_series(LineSeries::new(
-            expected_points,
-            ShapeStyle::from(&BLUE).stroke_width(3),
-        ))?;
+        chart
+            .draw_series(LineSeries::new(
+                expected_points,
+                ShapeStyle::from(&BLUE).stroke_width(3),
+            ))?
+            .label("Initial signal")
+            .legend(|(x, y)| {
+                PathElement::new(
+                    vec![(x, y), (x + 20, y)],
+                    ShapeStyle::from(&BLUE).stroke_width(3),
+                )
+            });
     }
     if !detected_points.is_empty() {
-        chart.draw_series(LineSeries::new(
-            detected_points,
-            ShapeStyle::from(&RED).stroke_width(3),
-        ))?;
+        chart
+            .draw_series(LineSeries::new(
+                detected_points,
+                ShapeStyle::from(&RED).stroke_width(3),
+            ))?
+            .label("Detected signal")
+            .legend(|(x, y)| {
+                PathElement::new(
+                    vec![(x, y), (x + 20, y)],
+                    ShapeStyle::from(&RED).stroke_width(3),
+                )
+            });
     }
+
+    chart
+        .configure_series_labels()
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
+        .draw()?;
+
     root.present()?;
     Ok(())
 }
