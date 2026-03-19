@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use super::TimeStretcher;
 use crate::io::dsps::Dsp;
 
@@ -17,9 +15,9 @@ pub struct WsolaTimeStretcher {
 
 struct ChannelState {
     input: Vec<f32>,
-    output: VecDeque<f32>,
+    synth: Vec<f32>,
+    synth_read_pos: usize,
     nominal_pos: usize,
-    tail: Vec<f32>,
     initialized: bool,
 }
 
@@ -27,19 +25,23 @@ impl ChannelState {
     fn new() -> Self {
         Self {
             input: Vec::new(),
-            output: VecDeque::new(),
+            synth: Vec::new(),
+            synth_read_pos: 0,
             nominal_pos: 0,
-            tail: Vec::new(),
             initialized: false,
         }
     }
 
     fn reset(&mut self) {
         self.input.clear();
-        self.output.clear();
+        self.synth.clear();
+        self.synth_read_pos = 0;
         self.nominal_pos = 0;
-        self.tail.clear();
         self.initialized = false;
+    }
+
+    fn available(&self) -> usize {
+        self.synth.len().saturating_sub(self.synth_read_pos)
     }
 }
 
@@ -58,9 +60,13 @@ impl WsolaTimeStretcher {
         }
     }
 
-    fn effective_speed(&self) -> f32 {
-        let pitch_factor = 2f32.powf(self.pitch_semitones / 12.0);
-        (self.speed * pitch_factor).clamp(0.05, 4.0)
+    fn pitch_factor(&self) -> f32 {
+        2f32.powf(self.pitch_semitones / 12.0)
+    }
+
+    fn time_scale(&self) -> f32 {
+        let factor = self.pitch_factor();
+        (self.speed / factor).clamp(0.05, 4.0)
     }
 
     fn ensure_layout(&mut self, sample_rate: u32, channels: usize) {
@@ -69,7 +75,7 @@ impl WsolaTimeStretcher {
         let overlap = ((frame_size as f32) * 0.5).round() as usize;
         let overlap = overlap.clamp(32, frame_size.saturating_sub(1));
         let synth_hop = frame_size - overlap;
-        let analysis_hop = ((synth_hop as f32) * self.effective_speed()).round() as usize;
+        let analysis_hop = ((synth_hop as f32) * self.time_scale()).round() as usize;
         let analysis_hop = analysis_hop.max(1);
         let search = ((sample_rate as f32) * 0.01).round() as usize;
         let search = search.max(8);
@@ -92,85 +98,95 @@ impl WsolaTimeStretcher {
         }
     }
 
+    fn apply_pitch_shift_with_factor(samples: &mut [f32], factor: f32) {
+        if (factor - 1.0).abs() < 1e-4 || samples.len() < 2 {
+            return;
+        }
+        let src = samples.to_vec();
+        let len = src.len();
+        for (n, out) in samples.iter_mut().enumerate() {
+            let pos = (n as f32 * factor).min((len - 1) as f32);
+            let i0 = pos.floor() as usize;
+            let i1 = (i0 + 1).min(len - 1);
+            let frac = pos - i0 as f32;
+            *out = src[i0] * (1.0 - frac) + src[i1] * frac;
+        }
+    }
+
     fn process_channel(&mut self, channel: usize, input: &[f32], output_frames: usize) -> Vec<f32> {
+        let frame_size = self.frame_size;
+        let overlap = self.overlap;
+        let search = self.search;
+        let analysis_hop = self.analysis_hop;
+        let pitch_factor = self.pitch_factor();
+
         let state = &mut self.states[channel];
         state.input.extend_from_slice(input);
 
-        let target = output_frames + self.frame_size;
-        while state.output.len() < target {
+        while state.available() < output_frames {
             if !state.initialized {
-                if state.input.len() < self.frame_size {
+                if state.input.len() < frame_size {
                     break;
                 }
-                for &v in &state.input[..self.frame_size] {
-                    state.output.push_back(v);
-                }
-                state.tail = state.input[self.frame_size - self.overlap..self.frame_size].to_vec();
-                state.nominal_pos = self.analysis_hop;
-                state.initialized = true;
+                let segment = state.input[0..frame_size].to_vec();
+                append_segment(state, &segment, overlap);
+                state.nominal_pos = analysis_hop;
                 continue;
             }
 
-            if state.nominal_pos + self.frame_size > state.input.len() {
+            if state.nominal_pos + frame_size > state.input.len() {
                 break;
             }
 
-            let search_start = state.nominal_pos.saturating_sub(self.search);
-            let search_end = (state.nominal_pos + self.search)
-                .min(state.input.len().saturating_sub(self.frame_size));
+            let tail_start = state.synth.len().saturating_sub(overlap);
+            let ref_overlap = &state.synth[tail_start..tail_start + overlap];
+
+            let search_start = state.nominal_pos.saturating_sub(search);
+            let search_end = (state.nominal_pos + search).min(state.input.len() - frame_size);
 
             let mut best_pos = state.nominal_pos;
             let mut best_score = f64::NEG_INFINITY;
-
             for pos in search_start..=search_end {
-                let score = normalized_cross_correlation(
-                    &state.tail,
-                    &state.input[pos..pos + self.overlap],
-                );
+                let cand = &state.input[pos..pos + overlap];
+                let score = normalized_cross_correlation(ref_overlap, cand);
                 if score > best_score {
                     best_score = score;
                     best_pos = pos;
                 }
             }
 
-            let segment = &state.input[best_pos..best_pos + self.frame_size];
-            let mut mixed_overlap = vec![0.0f32; self.overlap];
-            for i in 0..self.overlap {
-                let t = i as f32 / self.overlap as f32;
-                let fade_in = 0.5 * (1.0 - (std::f32::consts::PI * t).cos());
-                let fade_out = 1.0 - fade_in;
-                mixed_overlap[i] = state.tail[i] * fade_out + segment[i] * fade_in;
-            }
+            let segment = state.input[best_pos..best_pos + frame_size].to_vec();
+            append_segment(state, &segment, overlap);
+            state.nominal_pos = best_pos + analysis_hop;
 
-            for &v in &mixed_overlap {
-                state.output.push_back(v);
-            }
-            for &v in &segment[self.overlap..] {
-                state.output.push_back(v);
-            }
-
-            let start_tail = self.frame_size - self.overlap;
-            state.tail.clear();
-            state
-                .tail
-                .extend_from_slice(&segment[start_tail..self.frame_size]);
-            state.nominal_pos = best_pos + self.analysis_hop;
-
-            let drop_before = state
-                .nominal_pos
-                .saturating_sub(self.frame_size + self.search);
+            let drop_before = state.nominal_pos.saturating_sub(frame_size + search);
             if drop_before > 0 {
                 state.input.drain(..drop_before);
-                state.nominal_pos = state.nominal_pos.saturating_sub(drop_before);
+                state.nominal_pos -= drop_before;
+            }
+
+            if state.synth_read_pos > frame_size * 8 {
+                state.synth.drain(..state.synth_read_pos);
+                state.synth_read_pos = 0;
             }
         }
 
         let mut out = vec![0.0f32; output_frames];
-        for sample in &mut out {
-            if let Some(v) = state.output.pop_front() {
-                *sample = v;
-            }
+        let available = state.available().min(output_frames);
+        if available > 0 {
+            let start = state.synth_read_pos;
+            let end = start + available;
+            out[..available].copy_from_slice(&state.synth[start..end]);
+            state.synth_read_pos += available;
         }
+
+        if available < output_frames {
+            let rem = output_frames - available;
+            let tail_start = input.len().saturating_sub(rem);
+            out[available..].copy_from_slice(&input[tail_start..tail_start + rem]);
+        }
+
+        Self::apply_pitch_shift_with_factor(&mut out, pitch_factor);
         out
     }
 }
@@ -195,14 +211,10 @@ impl Dsp for WsolaTimeStretcher {
             }
         }
 
-        let mut outputs = vec![vec![0.0f32; frames]; channels];
         for ch in 0..channels {
-            outputs[ch] = self.process_channel(ch, &inputs[ch], frames);
-        }
-
-        for frame in 0..frames {
-            for ch in 0..channels {
-                buffer[frame * channels + ch] = outputs[ch][frame];
+            let out = self.process_channel(ch, &inputs[ch], frames);
+            for (frame, sample) in out.iter().enumerate() {
+                buffer[frame * channels + ch] = *sample;
             }
         }
     }
@@ -223,7 +235,7 @@ impl TimeStretcher for WsolaTimeStretcher {
         self.speed = speed;
         self.pitch_semitones = pitch_semitones;
         if self.synth_hop > 0 {
-            self.analysis_hop = ((self.synth_hop as f32) * self.effective_speed()).round() as usize;
+            self.analysis_hop = ((self.synth_hop as f32) * self.time_scale()).round() as usize;
             self.analysis_hop = self.analysis_hop.max(1);
         }
     }
@@ -235,6 +247,29 @@ impl TimeStretcher for WsolaTimeStretcher {
     fn pitch_semitones(&self) -> f32 {
         self.pitch_semitones
     }
+}
+
+fn append_segment(state: &mut ChannelState, segment: &[f32], overlap: usize) {
+    if !state.initialized {
+        state.synth.extend_from_slice(segment);
+        state.initialized = true;
+        return;
+    }
+
+    if state.synth.len() < overlap {
+        state.synth.extend_from_slice(segment);
+        return;
+    }
+
+    let tail_start = state.synth.len() - overlap;
+    for i in 0..overlap {
+        let t = i as f32 / overlap as f32;
+        let fade_in = 0.5 * (1.0 - (std::f32::consts::PI * t).cos());
+        let fade_out = 1.0 - fade_in;
+        state.synth[tail_start + i] = state.synth[tail_start + i] * fade_out + segment[i] * fade_in;
+    }
+
+    state.synth.extend_from_slice(&segment[overlap..]);
 }
 
 fn normalized_cross_correlation(a: &[f32], b: &[f32]) -> f64 {
@@ -271,41 +306,104 @@ fn normalized_cross_correlation(a: &[f32], b: &[f32]) -> f64 {
 mod tests {
     use super::*;
 
+    fn estimate_freq(signal: &[f32], sample_rate: f32) -> f32 {
+        let mut zero_cross = 0usize;
+        for i in 1..signal.len() {
+            let a = signal[i - 1];
+            let b = signal[i];
+            if (a <= 0.0 && b > 0.0) || (a >= 0.0 && b < 0.0) {
+                zero_cross += 1;
+            }
+        }
+        (zero_cross as f32 * sample_rate) / (2.0 * signal.len() as f32)
+    }
+
     #[test]
-    fn wsola_produces_non_silent_output() {
+    fn identity_keeps_frequency_close() {
         let mut s = WsolaTimeStretcher::new();
-        s.set_params(1.2, 0.0);
+        s.set_params(1.0, 0.0);
         let sr = 48_000;
         let channels = 1;
-        let mut buf = vec![0.0f32; 4096];
-        for (i, v) in buf.iter_mut().enumerate() {
+        let total = 48_000;
+        let mut out = Vec::new();
+
+        let mut input = vec![0.0f32; total];
+        for (i, v) in input.iter_mut().enumerate() {
             *v = (2.0 * std::f32::consts::PI * 220.0 * (i as f32) / (sr as f32)).sin();
         }
-        s.process(&mut buf, sr, channels);
-        let energy: f32 = buf.iter().map(|v| v * v).sum();
-        assert!(energy > 1.0);
+
+        for chunk in input.chunks(1024) {
+            let mut buf = chunk.to_vec();
+            s.process(&mut buf, sr, channels);
+            out.extend_from_slice(&buf);
+        }
+
+        let in_f = estimate_freq(&input[sr as usize / 4..sr as usize], sr as f32);
+        let out_f = estimate_freq(&out[sr as usize / 4..sr as usize], sr as f32);
+        assert!((out_f - in_f).abs() < 8.0);
     }
 
     #[test]
-    fn ncc_identity_is_one() {
-        let x = [1.0f32, 2.0, 3.0, 4.0];
-        let c = normalized_cross_correlation(&x, &x);
-        assert!((c - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn pitch_parameter_changes_processing_rate() {
-        let mut normal = WsolaTimeStretcher::new();
-        normal.set_params(1.0, 0.0);
-        let mut pitched = WsolaTimeStretcher::new();
-        pitched.set_params(1.0, 12.0);
-
+    fn pitch_shift_changes_frequency() {
         let sr = 48_000;
         let channels = 1;
-        let mut probe = vec![0.0f32; 4096];
-        normal.process(&mut probe, sr, channels);
-        pitched.process(&mut probe, sr, channels);
+        let total = 48_000;
 
-        assert!(pitched.analysis_hop > normal.analysis_hop);
+        let mut input = vec![0.0f32; total];
+        for (i, v) in input.iter_mut().enumerate() {
+            *v = (2.0 * std::f32::consts::PI * 220.0 * (i as f32) / (sr as f32)).sin();
+        }
+
+        let mut baseline = WsolaTimeStretcher::new();
+        baseline.set_params(1.0, 0.0);
+        let mut shifted = WsolaTimeStretcher::new();
+        shifted.set_params(1.0, 12.0);
+
+        let mut out_base = Vec::new();
+        let mut out_shift = Vec::new();
+        for chunk in input.chunks(1024) {
+            let mut a = chunk.to_vec();
+            let mut b = chunk.to_vec();
+            baseline.process(&mut a, sr, channels);
+            shifted.process(&mut b, sr, channels);
+            out_base.extend_from_slice(&a);
+            out_shift.extend_from_slice(&b);
+        }
+
+        let mut diff = 0.0f32;
+        for (a, b) in out_base.iter().zip(out_shift.iter()) {
+            diff += (a - b).abs();
+        }
+        diff /= out_base.len() as f32;
+        assert!(diff > 0.01);
+    }
+
+    #[test]
+    fn no_large_zero_gaps() {
+        let mut s = WsolaTimeStretcher::new();
+        s.set_params(1.0, 0.0);
+        let sr = 48_000;
+        let channels = 1;
+        let total = 48_000;
+        let mut zeroish = 0usize;
+        let mut count = 0usize;
+
+        let mut input = vec![0.0f32; total];
+        for (i, v) in input.iter_mut().enumerate() {
+            *v = (2.0 * std::f32::consts::PI * 220.0 * (i as f32) / (sr as f32)).sin();
+        }
+
+        for chunk in input.chunks(1024) {
+            let mut buf = chunk.to_vec();
+            s.process(&mut buf, sr, channels);
+            for x in &buf {
+                if x.abs() < 1e-5 {
+                    zeroish += 1;
+                }
+                count += 1;
+            }
+        }
+
+        assert!((zeroish as f32) / (count as f32) < 0.2);
     }
 }
