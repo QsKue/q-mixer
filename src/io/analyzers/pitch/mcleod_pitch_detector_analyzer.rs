@@ -5,7 +5,7 @@ use pitch_detection::detector::PitchDetector;
 use pitch_detection::detector::mcleod::McLeodDetector;
 
 /// Realtime pitch analyzer backed by `pitch_detection::detector::mcleod::McLeodDetector`.
-pub struct RealtimePitchAnalyzer {
+pub struct McleodPitchDetectorAnalyzer {
     ring: Vec<f32>,
     ring_pos: usize,
     filled: usize,
@@ -29,7 +29,7 @@ pub struct RealtimePitchAnalyzer {
     last_note: Option<i32>,
 }
 
-impl RealtimePitchAnalyzer {
+impl McleodPitchDetectorAnalyzer {
     pub fn new() -> Self {
         Self {
             ring: Vec::new(),
@@ -138,7 +138,7 @@ impl RealtimePitchAnalyzer {
     }
 }
 
-impl Analyzer for RealtimePitchAnalyzer {
+impl Analyzer for McleodPitchDetectorAnalyzer {
     fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;

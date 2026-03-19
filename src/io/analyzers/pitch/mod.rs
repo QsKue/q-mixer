@@ -1,3 +1,3 @@
-mod realtime_pitch_analyzer;
+mod mcleod_pitch_detector_analyzer;
 
-pub use realtime_pitch_analyzer::RealtimePitchAnalyzer;
+pub use mcleod_pitch_detector_analyzer::McleodPitchDetectorAnalyzer;
