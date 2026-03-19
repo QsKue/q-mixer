@@ -1,3 +1,5 @@
+pub mod wsola;
+
 use super::dsps::Dsp;
 
 pub trait TimeStretcher: Send + Dsp {

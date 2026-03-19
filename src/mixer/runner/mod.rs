@@ -104,6 +104,20 @@ impl Runner {
                         }
                     }
                 }
+                MixerTask::ChannelSetSpeed { index, speed } => {
+                    if let Some(runner) = runner.as_mut() {
+                        if let Some(channel) = runner.channels.get_mut(&index) {
+                            channel.set_speed(speed);
+                        }
+                    }
+                }
+                MixerTask::ChannelSetPitchSemitones { index, semitones } => {
+                    if let Some(runner) = runner.as_mut() {
+                        if let Some(channel) = runner.channels.get_mut(&index) {
+                            channel.set_pitch_semitones(semitones);
+                        }
+                    }
+                }
             }
         }
 

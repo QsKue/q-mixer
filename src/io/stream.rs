@@ -90,6 +90,16 @@ impl Stream {
         self.volume
     }
 
+    pub fn set_speed(&mut self, speed: f32) {
+        let pitch = self.time_stretcher.pitch_semitones();
+        self.time_stretcher.set_params(speed, pitch);
+    }
+
+    pub fn set_pitch_semitones(&mut self, pitch_semitones: f32) {
+        let speed = self.time_stretcher.speed();
+        self.time_stretcher.set_params(speed, pitch_semitones);
+    }
+
     pub fn analyzers(&mut self) -> &mut Vec<Box<dyn Analyzer>> {
         &mut self.analyzers
     }

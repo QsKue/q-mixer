@@ -39,6 +39,18 @@ impl Channel {
         self.is_playing = true;
     }
 
+    pub fn set_speed(&mut self, speed: f32) {
+        if let Some(stream) = self.stream.as_mut() {
+            stream.set_speed(speed);
+        }
+    }
+
+    pub fn set_pitch_semitones(&mut self, semitones: f32) {
+        if let Some(stream) = self.stream.as_mut() {
+            stream.set_pitch_semitones(semitones);
+        }
+    }
+
     pub fn get_data(
         &mut self,
         buffer: &mut [f32],

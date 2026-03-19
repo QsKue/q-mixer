@@ -72,7 +72,7 @@ impl Mixer {
         };
 
         let resampler = Box::new(resamplers::RubatoResampler::new());
-        let time_stretcher = Box::new(time_stretchers::NoopTimeStretcher {});
+        let time_stretcher = Box::new(time_stretchers::wsola::WsolaTimeStretcher::new());
 
         let _ = self.tx_task.send(MixerTask::ChannelLoad {
             index,
@@ -85,5 +85,17 @@ impl Mixer {
 
     pub fn play_channel(&self, index: usize) {
         let _ = self.tx_task.send(MixerTask::ChannelPlay { index });
+    }
+
+    pub fn set_channel_speed(&self, index: usize, speed: f32) {
+        let _ = self
+            .tx_task
+            .send(MixerTask::ChannelSetSpeed { index, speed });
+    }
+
+    pub fn set_channel_pitch_semitones(&self, index: usize, semitones: f32) {
+        let _ = self
+            .tx_task
+            .send(MixerTask::ChannelSetPitchSemitones { index, semitones });
     }
 }

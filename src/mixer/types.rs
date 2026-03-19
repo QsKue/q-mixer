@@ -24,6 +24,14 @@ pub(crate) enum MixerTask {
     ChannelPlay {
         index: usize,
     },
+    ChannelSetSpeed {
+        index: usize,
+        speed: f32,
+    },
+    ChannelSetPitchSemitones {
+        index: usize,
+        semitones: f32,
+    },
 }
 
 pub enum MixerEvent {}
