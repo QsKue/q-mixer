@@ -4,10 +4,9 @@ use std::collections::VecDeque;
 
 use anyhow::Context as _;
 use rubato::{
+    Async, FixedAsync, Indexing, Resampler as RubatoResamplerTrait, SincInterpolationParameters,
+    SincInterpolationType, WindowFunction,
     audioadapter::{Adapter, AdapterMut},
-    Async, FixedAsync, Indexing,
-    Resampler as RubatoResamplerTrait,
-    SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 
 use super::{Resampler, ResamplerResult, ResamplerStatus};
@@ -111,8 +110,10 @@ impl RubatoResampler {
 
         self.tmp_frame.resize(ch, 0.0);
 
-        let approx_max_expand = ((out_sample_rate as f64 / self.sample_rate as f64) * chunk as f64).ceil() as usize;
-        self.out_cache = VecDeque::with_capacity(approx_max_expand.saturating_mul(ch).saturating_mul(2));
+        let approx_max_expand =
+            ((out_sample_rate as f64 / self.sample_rate as f64) * chunk as f64).ceil() as usize;
+        self.out_cache =
+            VecDeque::with_capacity(approx_max_expand.saturating_mul(ch).saturating_mul(2));
 
         self.rub = Some(r);
         self.out_sample_rate = out_sample_rate;
@@ -120,7 +121,12 @@ impl RubatoResampler {
     }
 
     #[inline]
-    fn map_channels_per_frame(input: &[f32], in_channels: usize, output: &mut [f32], out_channels: usize) {
+    fn map_channels_per_frame(
+        input: &[f32],
+        in_channels: usize,
+        output: &mut [f32],
+        out_channels: usize,
+    ) {
         match (in_channels, out_channels) {
             (i, o) if i == o => {
                 output[..i].copy_from_slice(&input[..i]);
@@ -192,7 +198,12 @@ impl RubatoResampler {
                 tmp_frame[c] = src.pop_front().unwrap();
             }
             let base = f * out_channels;
-            Self::map_channels_per_frame(&tmp_frame[..in_channels], in_channels, &mut buffer[base..base + out_channels], out_channels);
+            Self::map_channels_per_frame(
+                &tmp_frame[..in_channels],
+                in_channels,
+                &mut buffer[base..base + out_channels],
+                out_channels,
+            );
         }
 
         frames
@@ -277,7 +288,11 @@ impl Resampler for RubatoResampler {
         if self.rub.is_none() {
             let frames_available = decode_cache.len() / self.channels;
             if frames_available == 0 {
-                return if eof { ResamplerStatus::Flushed } else { ResamplerStatus::NeedMoreInput };
+                return if eof {
+                    ResamplerStatus::Flushed
+                } else {
+                    ResamplerStatus::NeedMoreInput
+                };
             }
 
             let want = frames_available.min(min_out_frames.max(1));
@@ -296,7 +311,10 @@ impl Resampler for RubatoResampler {
                     );
 
                     return ResamplerStatus::Progress {
-                        result: ResamplerResult { out_frames: frames_done, src_frames_used: frames_done }
+                        result: ResamplerResult {
+                            out_frames: frames_done,
+                            src_frames_used: frames_done,
+                        },
                     };
                 }
                 None => {
@@ -313,7 +331,10 @@ impl Resampler for RubatoResampler {
                     decode_cache.drain(..samples);
 
                     return ResamplerStatus::Progress {
-                        result: ResamplerResult { out_frames: want, src_frames_used: want }
+                        result: ResamplerResult {
+                            out_frames: want,
+                            src_frames_used: want,
+                        },
                     };
                 }
             }
@@ -362,12 +383,17 @@ impl Resampler for RubatoResampler {
                 self.out_buf.resize(out_need_samples, 0.0);
             }
 
-            let input = InterleavedSlice::new(&self.in_buf[..need_samples], self.channels, need_in).unwrap();
+            let input = InterleavedSlice::new(&self.in_buf[..need_samples], self.channels, need_in)
+                .unwrap();
 
             let indexing = Indexing {
                 input_offset: 0,
                 output_offset: 0,
-                partial_len: if feed_frames < need_in { Some(feed_frames) } else { None },
+                partial_len: if feed_frames < need_in {
+                    Some(feed_frames)
+                } else {
+                    None
+                },
                 active_channels_mask: None,
             };
 
@@ -376,7 +402,8 @@ impl Resampler for RubatoResampler {
                     &mut self.out_buf[..out_need_samples],
                     self.channels,
                     out_cap_frames,
-                ).unwrap();
+                )
+                .unwrap();
 
                 r.process_into_buffer(&input, &mut output, Some(&indexing))
                     .unwrap_or((0, 0))
@@ -412,7 +439,7 @@ impl Resampler for RubatoResampler {
                 result: ResamplerResult {
                     out_frames: out_frames_total,
                     src_frames_used: src_used_total,
-                }
+                },
             };
         }
 
@@ -453,9 +480,17 @@ pub struct InterleavedSlice<'a, T> {
 
 impl<'a, T> InterleavedSlice<'a, T> {
     pub fn new(data: &'a [T], channels: usize, frames: usize) -> Option<Self> {
-        if channels == 0 { return None; }
-        if data.len() < channels * frames { return None; }
-        Some(Self { data, channels, frames })
+        if channels == 0 {
+            return None;
+        }
+        if data.len() < channels * frames {
+            return None;
+        }
+        Some(Self {
+            data,
+            channels,
+            frames,
+        })
     }
 
     #[inline]
@@ -470,9 +505,13 @@ impl<'a, T: Clone + 'a> Adapter<'a, T> for InterleavedSlice<'a, T> {
         unsafe { self.data.get_unchecked(self.idx(channel, frame)).clone() }
     }
     #[inline]
-    fn channels(&self) -> usize { self.channels }
+    fn channels(&self) -> usize {
+        self.channels
+    }
     #[inline]
-    fn frames(&self) -> usize { self.frames }
+    fn frames(&self) -> usize {
+        self.frames
+    }
 }
 
 /// Mutable adapter over interleaved audio.
@@ -484,9 +523,17 @@ pub struct InterleavedSliceMut<'a, T> {
 
 impl<'a, T> InterleavedSliceMut<'a, T> {
     pub fn new(data: &'a mut [T], channels: usize, frames: usize) -> Option<Self> {
-        if channels == 0 { return None; }
-        if data.len() < channels * frames { return None; }
-        Some(Self { data, channels, frames })
+        if channels == 0 {
+            return None;
+        }
+        if data.len() < channels * frames {
+            return None;
+        }
+        Some(Self {
+            data,
+            channels,
+            frames,
+        })
     }
 
     #[inline]
@@ -501,19 +548,18 @@ impl<'a, T: Clone + 'a> Adapter<'a, T> for InterleavedSliceMut<'a, T> {
         unsafe { self.data.get_unchecked(self.idx(channel, frame)).clone() }
     }
     #[inline]
-    fn channels(&self) -> usize { self.channels }
+    fn channels(&self) -> usize {
+        self.channels
+    }
     #[inline]
-    fn frames(&self) -> usize { self.frames }
+    fn frames(&self) -> usize {
+        self.frames
+    }
 }
 
 impl<'a, T: Clone + 'a> AdapterMut<'a, T> for InterleavedSliceMut<'a, T> {
     #[inline]
-    unsafe fn write_sample_unchecked(
-        &mut self,
-        channel: usize,
-        frame: usize,
-        value: &T,
-    ) -> bool {
+    unsafe fn write_sample_unchecked(&mut self, channel: usize, frame: usize, value: &T) -> bool {
         let i = self.idx(channel, frame);
         *unsafe { self.data.get_unchecked_mut(i) } = value.clone();
         true

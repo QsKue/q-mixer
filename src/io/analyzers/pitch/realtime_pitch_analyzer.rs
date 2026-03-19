@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use crate::io::analyzers::Analyzer;
 
-use pitch_detection::detector::mcleod::McLeodDetector;
 use pitch_detection::detector::PitchDetector;
+use pitch_detection::detector::mcleod::McLeodDetector;
 
 pub struct RealtimePitchAnalyzer {
     // Ring buffer holding mono samples
@@ -57,7 +57,7 @@ pub struct RealtimePitchAnalyzer {
     clarity_threshold: f32,
 
     // Smoothing & hysteresis knobs
-    smoothing_alpha: f32,  // 0..1 (higher = more smoothing)
+    smoothing_alpha: f32,   // 0..1 (higher = more smoothing)
     note_hold_updates: u32, // require N consecutive updates before declaring a new note
 }
 
@@ -241,7 +241,9 @@ impl RealtimePitchAnalyzer {
     }
 
     fn midi_to_note_name(midi_rounded: i32) -> &'static str {
-        const N: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        const N: [&str; 12] = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
         let idx = ((midi_rounded % 12) + 12) % 12;
         N[idx as usize]
     }
@@ -283,7 +285,9 @@ impl Analyzer for RealtimePitchAnalyzer {
         // Reuse window buffer (no per-call alloc)
         Self::read_last_into_from_ring(&self.ring, self.ring_pos, &mut self.window_buf);
 
-        let Some(det) = self.detector.as_mut() else { return; };
+        let Some(det) = self.detector.as_mut() else {
+            return;
+        };
 
         // McLeod pitch (MPM) from pitch-detection crate.
         // get_pitch(signal, sample_rate, power_threshold, clarity_threshold)

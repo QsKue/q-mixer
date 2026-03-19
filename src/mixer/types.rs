@@ -1,8 +1,4 @@
-use crate::io::{
-    decoders::Decoder,
-    resamplers::Resampler,
-    time_stretchers::TimeStretcher,
-};
+use crate::io::{decoders::Decoder, resamplers::Resampler, time_stretchers::TimeStretcher};
 
 pub enum ChannelSource {
     File {

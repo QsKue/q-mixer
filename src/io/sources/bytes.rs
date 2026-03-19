@@ -19,15 +19,15 @@ impl super::AudioSource for BytesSource {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.cursor.read(buf)
     }
-    
+
     fn seek(&mut self, pos: u64) -> std::io::Result<u64> {
         self.cursor.seek(SeekFrom::Start(pos))
     }
-    
+
     fn size(&self) -> Option<u64> {
         Some(self.size)
     }
-    
+
     fn is_seekable(&self) -> bool {
         true
     }

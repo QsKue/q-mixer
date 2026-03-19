@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom};
 
 // TODO stop using anyhow
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{Decoder as SymDecoder, DecoderOptions};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
@@ -32,27 +32,23 @@ pub struct SymphoniaDecoder {
 
     decode_cache: VecDeque<f32>,
     pos_frames: u64,
-    
+
     eof_reached: bool,
 }
 
 impl SymphoniaDecoder {
-    
     pub fn new(source: Box<dyn AudioSource>) -> Result<Self> {
-        
         let adapter = SourceAdapter(source);
-        let media_source = MediaSourceStream::new(
-            Box::new(adapter),
-            MediaSourceStreamOptions::default()
-        );
-        
+        let media_source =
+            MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+
         let probed = get_probe().format(
             &Default::default(),
             media_source,
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )?;
-        
+
         let mut format = probed.format;
         let track = format
             .default_track()
@@ -98,7 +94,8 @@ impl SymphoniaDecoder {
         }
 
         let total_samples = track.codec_params.n_frames.map(|n| {
-            n.saturating_sub(priming_frames).saturating_sub(tail_padding_frames)
+            n.saturating_sub(priming_frames)
+                .saturating_sub(tail_padding_frames)
         });
 
         let cache_seconds = 0.5;
@@ -161,8 +158,8 @@ impl SymphoniaDecoder {
             let spec = *decoded.spec();
             let capacity = decoded.capacity() as u64;
 
-            let need_new = self.sample_buffer.is_none() 
-                || self.sample_capacity < capacity 
+            let need_new = self.sample_buffer.is_none()
+                || self.sample_capacity < capacity
                 || self.sample_spec != Some(spec);
 
             if need_new {
@@ -173,17 +170,16 @@ impl SymphoniaDecoder {
 
             let sample_buffer = self.sample_buffer.as_mut().unwrap();
             sample_buffer.copy_interleaved_ref(decoded);
-            
+
             let samples = sample_buffer.samples();
             self.decode_cache.extend(samples);
-            
+
             return Ok(true);
         }
     }
 }
 
 impl super::Decoder for SymphoniaDecoder {
-
     #[inline]
     fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -209,12 +205,12 @@ impl super::Decoder for SymphoniaDecoder {
             if frames_available > 0 {
                 let frames_to_copy = (frames_requested - frames_written).min(frames_available);
                 let samples_to_copy = frames_to_copy * self.channels;
-                
+
                 for i in 0..samples_to_copy {
-                    buffer[frames_written * self.channels + i] = 
+                    buffer[frames_written * self.channels + i] =
                         self.decode_cache.pop_front().unwrap();
                 }
-                
+
                 frames_written += frames_to_copy;
                 self.pos_frames += frames_to_copy as u64;
             }
@@ -241,17 +237,22 @@ impl super::Decoder for SymphoniaDecoder {
 
     fn seek(&mut self, frame: u64) -> Result<u64, String> {
         let target_frame = frame + self.priming_frames;
-        
+
         let secs = target_frame as f64 / self.sample_rate as f64;
         let time = symphonia::core::units::Time {
             seconds: secs.trunc() as u64,
             frac: secs.fract(),
         };
 
-        self.format.seek(
-            SeekMode::Coarse,
-            SeekTo::Time { time, track_id: Some(self.track_id) },
-        ).map_err(|e| format!("Seek failed: {:?}", e))?;
+        self.format
+            .seek(
+                SeekMode::Coarse,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
+                },
+            )
+            .map_err(|e| format!("Seek failed: {:?}", e))?;
 
         self.decoder.reset();
         self.decode_cache.clear();
@@ -272,12 +273,12 @@ impl super::Decoder for SymphoniaDecoder {
 }
 
 struct SourceAdapter(Box<dyn AudioSource>);
-        
+
 impl MediaSource for SourceAdapter {
     fn is_seekable(&self) -> bool {
         self.0.is_seekable()
     }
-    
+
     fn byte_len(&self) -> Option<u64> {
         self.0.size()
     }
@@ -295,8 +296,8 @@ impl Seek for SourceAdapter {
             SeekFrom::Start(p) => self.0.seek(p),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
-                "only SeekFrom::Start supported"
-            ))
+                "only SeekFrom::Start supported",
+            )),
         }
     }
 }

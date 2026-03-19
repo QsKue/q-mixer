@@ -27,12 +27,7 @@ fn triangle_hz(hz: f64) -> impl Signal<Frame = f64> {
     phase.map(|p| 1.0 - 4.0 * (p - 0.5).abs())
 }
 
-fn render_note_with_vibrato(
-    base_hz: f64,
-    note_secs: f32,
-    vibrato_hz: f64,
-    depth: f64,
-) -> Vec<f32> {
+fn render_note_with_vibrato(base_hz: f64, note_secs: f32, vibrato_hz: f64, depth: f64) -> Vec<f32> {
     let samples = (SAMPLE_RATE as f32 * note_secs) as usize;
     let mut data = Vec::with_capacity(samples);
     let mut lfo = signal::rate(SAMPLE_RATE as f64).const_hz(vibrato_hz).sine();
@@ -476,9 +471,7 @@ fn test_play_octave_doubling() {
     let steps = (SAMPLE_RATE * 10) as usize;
     let base_freq = 220.0;
     let octave_freq = 440.0;
-    let mut base = signal::rate(SAMPLE_RATE as f64)
-        .const_hz(base_freq)
-        .sine();
+    let mut base = signal::rate(SAMPLE_RATE as f64).const_hz(base_freq).sine();
     let mut octave = signal::rate(SAMPLE_RATE as f64)
         .const_hz(octave_freq)
         .sine();
@@ -570,17 +563,11 @@ fn test_play_chromatic_passing_tones() {
 fn test_play_parallel_key_modulation() {
     let mut data = Vec::new();
     for &note in [261.63, 329.63, 392.0, 523.25, 392.0].iter() {
-        let segment = render_signal(
-            signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(),
-            1.0,
-        );
+        let segment = render_signal(signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(), 1.0);
         data.extend(segment);
     }
     for &note in [261.63, 311.13, 392.0, 493.88, 392.0].iter() {
-        let segment = render_signal(
-            signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(),
-            1.0,
-        );
+        let segment = render_signal(signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(), 1.0);
         data.extend(segment);
     }
     let expected = expected_key_from_hz(392.0);
@@ -608,17 +595,11 @@ fn test_play_parallel_key_modulation() {
 fn test_play_relative_key_modulation() {
     let mut data = Vec::new();
     for &note in [261.63, 329.63, 392.0, 523.25, 392.0].iter() {
-        let segment = render_signal(
-            signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(),
-            1.0,
-        );
+        let segment = render_signal(signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(), 1.0);
         data.extend(segment);
     }
     for &note in [220.0, 261.63, 329.63, 440.0, 329.63].iter() {
-        let segment = render_signal(
-            signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(),
-            1.0,
-        );
+        let segment = render_signal(signal::rate(SAMPLE_RATE as f64).const_hz(note).sine(), 1.0);
         data.extend(segment);
     }
     let expected = expected_key_from_hz(329.63);
@@ -684,9 +665,7 @@ fn test_play_percussive_sequence() {
 #[test]
 #[ignore]
 fn test_generated_note_order_and_plots() {
-    let notes = [
-        261.63, 293.66, 329.63, 349.23, 392.0, 440.0, 493.88, 523.25,
-    ];
+    let notes = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0, 493.88, 523.25];
     let note_secs = 0.8;
     let mut data = Vec::new();
     for &note in notes.iter() {
@@ -697,7 +676,10 @@ fn test_generated_note_order_and_plots() {
         data.extend(segment);
     }
 
-    let expected_midi: Vec<i32> = notes.iter().map(|&freq| expected_midi_from_hz(freq)).collect();
+    let expected_midi: Vec<i32> = notes
+        .iter()
+        .map(|&freq| expected_midi_from_hz(freq))
+        .collect();
     let detected_events = collect_detected_notes(&data);
     let detected_midi: Vec<i32> = detected_events.iter().map(|(_, note)| *note).collect();
     assert_notes_in_order(&expected_midi, &detected_midi);

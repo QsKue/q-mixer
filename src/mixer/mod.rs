@@ -53,7 +53,8 @@ impl Mixer {
 
         let decoder: Box<dyn decoders::Decoder> = match source {
             ChannelSource::File { path } => {
-                let source = sources::FileSource::new(path).map_err(|err| "Error creating source".to_string())?;
+                let source = sources::FileSource::new(path)
+                    .map_err(|err| "Error creating source".to_string())?;
                 let decoder = decoders::SymphoniaDecoder::new(Box::new(source))
                     .map_err(|err| "Error creating decoder".to_string())?;
                 Box::new(decoder)
@@ -63,7 +64,11 @@ impl Mixer {
                 sample_rate,
                 channels,
                 samples,
-            } => Box::new(decoders::GeneratedDecoder::new(sample_rate, channels, samples)),
+            } => Box::new(decoders::GeneratedDecoder::new(
+                sample_rate,
+                channels,
+                samples,
+            )),
         };
 
         let resampler = Box::new(resamplers::RubatoResampler::new());

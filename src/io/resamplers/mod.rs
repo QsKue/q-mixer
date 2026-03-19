@@ -14,8 +14,7 @@ pub enum ResamplerStatus {
     Flushed,
 }
 
-pub trait Resampler: Send { 
-
+pub trait Resampler: Send {
     fn produce_into(
         &mut self,
         decode_cache: &mut std::collections::VecDeque<f32>,

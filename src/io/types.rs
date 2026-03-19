@@ -1,4 +1,3 @@
-
 #[derive(Clone, Copy)]
 pub enum StreamTime {
     Beat(f32),
@@ -6,7 +5,6 @@ pub enum StreamTime {
 }
 
 impl StreamTime {
-
     pub(crate) fn from_sample(sample: u64, sample_rate: u32) -> Self {
         StreamTime::Second(sample as f64 / sample_rate as f64)
     }

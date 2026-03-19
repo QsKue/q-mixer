@@ -1,4 +1,3 @@
-
 pub trait Dsp: Send {
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32, channels: usize);
 
@@ -12,9 +11,10 @@ pub(crate) struct DspChain {
 }
 
 impl DspChain {
-
     pub fn new() -> Self {
-        Self { processors: Vec::new() }
+        Self {
+            processors: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, processor: Box<dyn Dsp>) {

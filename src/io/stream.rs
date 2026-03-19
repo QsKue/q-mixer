@@ -1,7 +1,12 @@
 use std::collections::VecDeque;
 
 use crate::io::{
-    analyzers::Analyzer, decoders::Decoder, dsps::DspChain, resamplers::{Resampler, ResamplerStatus}, time_stretchers::TimeStretcher, types::StreamTime
+    analyzers::Analyzer,
+    decoders::Decoder,
+    dsps::DspChain,
+    resamplers::{Resampler, ResamplerStatus},
+    time_stretchers::TimeStretcher,
+    types::StreamTime,
 };
 
 // TODO: variable ?
@@ -22,7 +27,6 @@ pub(crate) struct Stream {
 }
 
 impl Stream {
-
     pub fn new(
         mut decoder: Box<dyn Decoder>,
         resampler: Box<dyn Resampler>,
@@ -31,16 +35,17 @@ impl Stream {
         gain: Option<f32>,
         volume: Option<f32>,
     ) -> Self {
-
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
 
         let pos = pos.unwrap_or(StreamTime::Beat(0.0));
         decoder.seek(pos.sample(decoder.sample_rate()));
-        
+
         Self {
             decoder,
-            decoder_cache: VecDeque::with_capacity(((sample_rate * channels as u32) as f32 * STREAM_CACHE_DURATION_SECONDS) as usize),
+            decoder_cache: VecDeque::with_capacity(
+                ((sample_rate * channels as u32) as f32 * STREAM_CACHE_DURATION_SECONDS) as usize,
+            ),
 
             analyzers: Vec::new(),
             resampler: resampler,
@@ -58,7 +63,8 @@ impl Stream {
     }
 
     pub fn position_set(&mut self, duration: StreamTime) {
-        self.decoder.seek(duration.sample(self.decoder.sample_rate()));
+        self.decoder
+            .seek(duration.sample(self.decoder.sample_rate()));
     }
 
     pub fn gain_set(&mut self, gain: f32) {
@@ -89,15 +95,22 @@ impl Stream {
         &mut self.post_fx
     }
 
-    pub fn get_data(&mut self, buffer: &mut [f32], out_sample_rate: u32, out_channels: usize) -> usize {
-
+    pub fn get_data(
+        &mut self,
+        buffer: &mut [f32],
+        out_sample_rate: u32,
+        out_channels: usize,
+    ) -> usize {
         buffer.fill(0.0);
-        
+
         let samples = self.get_stream_data(buffer, out_sample_rate, out_channels);
-        if samples == 0 { return 0; }
+        if samples == 0 {
+            return 0;
+        }
 
         if !self.post_fx.is_empty() {
-            self.post_fx.process(&mut buffer[..samples], out_sample_rate, out_channels);
+            self.post_fx
+                .process(&mut buffer[..samples], out_sample_rate, out_channels);
         }
 
         // Volume / Gain
@@ -108,14 +121,18 @@ impl Stream {
         samples
     }
 
-    fn get_stream_data(&mut self, buffer: &mut [f32], target_sample_rate: u32, target_channels: usize) -> usize {
+    fn get_stream_data(
+        &mut self,
+        buffer: &mut [f32],
+        target_sample_rate: u32,
+        target_channels: usize,
+    ) -> usize {
         let mut written = 0;
 
         // AI code, refactor to make simpler
-        written += self.resampler.drain_out_with_conv(
-            &mut buffer[written..],
-            target_channels,
-        );
+        written += self
+            .resampler
+            .drain_out_with_conv(&mut buffer[written..], target_channels);
 
         while written < buffer.len() {
             let need_frames = (buffer.len() - written) / target_channels;
@@ -158,18 +175,30 @@ impl Stream {
         match self.decoder.decode(&mut temp) {
             Ok(frames) if frames > 0 => {
                 let samples = frames * self.decoder.channels();
-                
+
                 if !self.analyzers.is_empty() {
                     for analyzer in &mut self.analyzers {
-                        let processed = analyzer.analyze(&temp[..samples], self.decoder.sample_rate(), self.decoder.channels());
+                        let processed = analyzer.analyze(
+                            &temp[..samples],
+                            self.decoder.sample_rate(),
+                            self.decoder.channels(),
+                        );
                     }
                 }
 
                 if !self.pre_fx.is_empty() {
-                    let processed = self.pre_fx.process(&mut temp[..samples], self.decoder.sample_rate(), self.decoder.channels());
+                    let processed = self.pre_fx.process(
+                        &mut temp[..samples],
+                        self.decoder.sample_rate(),
+                        self.decoder.channels(),
+                    );
                 }
 
-                let stretched = self.time_stretcher.process(&mut temp[..samples], self.decoder.sample_rate(), self.decoder.channels());
+                let stretched = self.time_stretcher.process(
+                    &mut temp[..samples],
+                    self.decoder.sample_rate(),
+                    self.decoder.channels(),
+                );
 
                 self.decoder_cache.extend(temp[..samples].to_vec());
 
