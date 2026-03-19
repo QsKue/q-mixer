@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::io::{
-    analyzers::Analyzer,
+    analyzers::{AnalysisEvent, Analyzer},
     decoders::Decoder,
     dsps::DspChain,
     resamplers::{Resampler, ResamplerStatus},
@@ -17,6 +17,7 @@ pub(crate) struct Stream {
     decoder_cache: VecDeque<f32>,
 
     analyzers: Vec<Box<dyn Analyzer>>,
+    analyzer_events: Vec<AnalysisEvent>,
     pre_fx: DspChain,
     time_stretcher: Box<dyn TimeStretcher>,
     resampler: Box<dyn Resampler>,
@@ -48,6 +49,7 @@ impl Stream {
             ),
 
             analyzers: Vec::new(),
+            analyzer_events: Vec::new(),
             resampler: resampler,
             pre_fx: DspChain::new(),
             time_stretcher: time_stretcher,
@@ -85,6 +87,10 @@ impl Stream {
 
     pub fn analyzers(&mut self) -> &mut Vec<Box<dyn Analyzer>> {
         &mut self.analyzers
+    }
+
+    pub fn drain_analysis_events(&mut self, out: &mut Vec<AnalysisEvent>) {
+        out.append(&mut self.analyzer_events);
     }
 
     pub fn pre_fx_mut(&mut self) -> &mut DspChain {
@@ -178,10 +184,11 @@ impl Stream {
 
                 if !self.analyzers.is_empty() {
                     for analyzer in &mut self.analyzers {
-                        let processed = analyzer.analyze(
+                        analyzer.analyze(
                             &temp[..samples],
                             self.decoder.sample_rate(),
                             self.decoder.channels(),
+                            &mut self.analyzer_events,
                         );
                     }
                 }

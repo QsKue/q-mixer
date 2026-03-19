@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::io::analyzers::Analyzer;
+use crate::io::analyzers::{AnalysisEvent, Analyzer};
 use pitch_detection::detector::PitchDetector;
 use pitch_detection::detector::mcleod::McLeodDetector;
 
@@ -138,7 +138,13 @@ impl McleodPitchDetector {
 }
 
 impl Analyzer for McleodPitchDetector {
-    fn analyze(&mut self, input: &[f32], sample_rate: u32, channels: usize) {
+    fn analyze(
+        &mut self,
+        input: &[f32],
+        sample_rate: u32,
+        channels: usize,
+        out_events: &mut Vec<AnalysisEvent>,
+    ) {
         if channels == 0 || input.is_empty() || sample_rate == 0 {
             return;
         }
@@ -192,6 +198,12 @@ impl Analyzer for McleodPitchDetector {
             return;
         };
 
-        self.last_note = Some(midi.round() as i32);
+        let rounded_midi = midi.round() as i32;
+        self.last_note = Some(rounded_midi);
+        out_events.push(AnalysisEvent::Pitch {
+            midi: rounded_midi,
+            hz: f0,
+            confidence: pitch.clarity,
+        });
     }
 }
