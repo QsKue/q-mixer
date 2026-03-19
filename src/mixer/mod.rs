@@ -72,7 +72,7 @@ impl Mixer {
         };
 
         let resampler = Box::new(resamplers::RubatoResampler::new());
-        let time_stretcher = Box::new(time_stretchers::NoopTimeStretcher {});
+        let time_stretcher = Box::new(time_stretchers::TdPsolaTimeStretcher::new());
 
         let _ = self.tx_task.send(MixerTask::ChannelLoad {
             index,
