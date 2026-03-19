@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use audio::io::analyzers::pitch::McleodPitchDetectorAnalyzer;
+use audio::io::analyzers::pitch_detector::McleodPitchDetectorAnalyzer;
 
 const SAMPLE_RATE: u32 = 44_100;
 

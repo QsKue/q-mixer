@@ -4,7 +4,6 @@ use crate::io::analyzers::Analyzer;
 use pitch_detection::detector::PitchDetector;
 use pitch_detection::detector::mcleod::McLeodDetector;
 
-/// Realtime pitch analyzer backed by `pitch_detection::detector::mcleod::McLeodDetector`.
 pub struct McleodPitchDetectorAnalyzer {
     ring: Vec<f32>,
     ring_pos: usize,

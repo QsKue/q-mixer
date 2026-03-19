@@ -1,3 +1,0 @@
-mod mcleod_pitch_detector_analyzer;
-
-pub use mcleod_pitch_detector_analyzer::McleodPitchDetectorAnalyzer;
