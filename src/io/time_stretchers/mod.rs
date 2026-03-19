@@ -9,6 +9,7 @@ pub trait TimeStretcher: Send + Dsp {
 
 pub struct NoopTimeStretcher;
 
+// We can add: TD-PSOLA, NFC-TSM, IIR Subband or with resamping (TDHS, WSOLA, PICOLA)
 impl Dsp for NoopTimeStretcher {
     fn process(&mut self, _buffer: &mut [f32], _sample_rate: u32, _channels: usize) {}
 
