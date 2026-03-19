@@ -30,4 +30,11 @@ impl DspChain {
     pub fn is_empty(&self) -> bool {
         self.processors.is_empty()
     }
+
+    pub fn set_param(&mut self, id: u32, value: f32) -> bool {
+        // Placeholder control surface for future DSP implementations.
+        // Returning false indicates the chain did not consume the parameter.
+        let _ = (id, value);
+        false
+    }
 }

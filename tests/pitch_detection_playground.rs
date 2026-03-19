@@ -16,8 +16,10 @@ use pitch_detection_fixtures::{
 fn analyze_samples(samples: &[f32]) -> Option<String> {
     let mut analyzer = McleodPitchDetector::new();
     analyzer.set_min_interval(Duration::from_millis(0));
+    let mut analysis_events = Vec::new();
     for chunk in samples.chunks(1024) {
-        analyzer.analyze(chunk, SAMPLE_RATE, 1);
+        analyzer.analyze(chunk, SAMPLE_RATE, 1, &mut analysis_events);
+        analysis_events.clear();
     }
     analyzer.detected_key()
 }
@@ -71,8 +73,10 @@ fn collect_detected_notes(samples: &[f32]) -> Vec<(f32, i32)> {
     let mut detected = Vec::new();
     let mut last_note = None;
     let mut processed = 0usize;
+    let mut analysis_events = Vec::new();
     for chunk in samples.chunks(1024) {
-        analyzer.analyze(chunk, SAMPLE_RATE, 1);
+        analyzer.analyze(chunk, SAMPLE_RATE, 1, &mut analysis_events);
+        analysis_events.clear();
         processed += chunk.len();
         let note = analyzer.detected_note();
         if note != last_note {
