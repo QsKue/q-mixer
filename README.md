@@ -17,3 +17,7 @@ If you want to use this software in a proprietary or closed-source product,
 you must obtain a separate commercial license.
 
 Contact us for commercial licensing
+
+## TODOs
+
+Add support for classical pitch detection algorithms (SWIPE, SRH, NLS, RAPT, YAAPT, PRAAT)
