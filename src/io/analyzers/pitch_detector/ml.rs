@@ -9,6 +9,7 @@ pub enum MlPitchModel {
     SwiftF0,
     Rmvpe,
     Crepe,
+    Fcpe,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,7 +63,7 @@ pub struct OnnxRawOutput {
 pub enum OnnxPrimaryInput {
     Waveform1D,
     FramedWaveform { frame_size: usize },
-    MelSpectrogram { bins: usize },
+    MelSpectrogram { bins: usize, frame_size: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +109,33 @@ impl OnnxModelParams {
             model_min_freq: 40.0,
             model_max_freq: 1_100.0,
             output_kind: OnnxOutputKind::DirectHz,
-            primary_input: OnnxPrimaryInput::MelSpectrogram { bins: 128 },
+            primary_input: OnnxPrimaryInput::MelSpectrogram {
+                bins: 128,
+                frame_size: 1024,
+            },
+            aux_scalar_inputs: vec![OnnxScalarInput {
+                tensor_name: "input_1".to_string(),
+                value: 0.006,
+            }],
+        }
+    }
+
+    pub fn for_fcpe(model_path: impl Into<String>) -> Self {
+        Self {
+            model_path: model_path.into(),
+            input_tensor_name: "input_0".to_string(),
+            f0_output_tensor_name: "pitchf".to_string(),
+            confidence_output_tensor_name: None,
+            expected_sample_rate: 16_000,
+            expected_window_size: 1024,
+            hop_size: 160,
+            model_min_freq: 40.0,
+            model_max_freq: 1_100.0,
+            output_kind: OnnxOutputKind::DirectHz,
+            primary_input: OnnxPrimaryInput::MelSpectrogram {
+                bins: 128,
+                frame_size: 1024,
+            },
             aux_scalar_inputs: vec![OnnxScalarInput {
                 tensor_name: "input_1".to_string(),
                 value: 0.006,
@@ -155,6 +182,7 @@ pub struct OnnxPitchConfig {
     pub swiftf0: Option<OnnxModelParams>,
     pub rmvpe: Option<OnnxModelParams>,
     pub crepe: Option<OnnxModelParams>,
+    pub fcpe: Option<OnnxModelParams>,
 }
 
 impl OnnxPitchConfig {
@@ -163,6 +191,7 @@ impl OnnxPitchConfig {
             swiftf0: None,
             rmvpe: None,
             crepe: None,
+            fcpe: None,
         }
     }
 
@@ -171,6 +200,7 @@ impl OnnxPitchConfig {
             MlPitchModel::SwiftF0 => self.swiftf0.as_ref(),
             MlPitchModel::Rmvpe => self.rmvpe.as_ref(),
             MlPitchModel::Crepe => self.crepe.as_ref(),
+            MlPitchModel::Fcpe => self.fcpe.as_ref(),
         }
     }
 }
@@ -350,6 +380,115 @@ impl OnnxMlPitchEngine {
         }
     }
 
+    fn hz_to_mel(hz: f32) -> f32 {
+        2_595.0 * (1.0 + hz / 700.0).log10()
+    }
+
+    fn mel_to_hz(mel: f32) -> f32 {
+        700.0 * (10f32.powf(mel / 2_595.0) - 1.0)
+    }
+
+    fn mel_filter_bank(sample_rate: u32, n_fft: usize, bins: usize) -> Option<Vec<Vec<f32>>> {
+        if bins == 0 || n_fft < 2 {
+            return None;
+        }
+
+        let n_freqs = (n_fft / 2) + 1;
+        let max_hz = sample_rate as f32 / 2.0;
+        let min_mel = Self::hz_to_mel(0.0);
+        let max_mel = Self::hz_to_mel(max_hz);
+
+        let mut mel_points = Vec::with_capacity(bins + 2);
+        for i in 0..(bins + 2) {
+            let t = i as f32 / (bins + 1) as f32;
+            mel_points.push(min_mel + t * (max_mel - min_mel));
+        }
+
+        let hz_points: Vec<f32> = mel_points.into_iter().map(Self::mel_to_hz).collect();
+        let bin_points: Vec<usize> = hz_points
+            .into_iter()
+            .map(|hz| ((n_fft as f32 + 1.0) * hz / sample_rate as f32).floor() as usize)
+            .map(|bin| bin.min(n_freqs.saturating_sub(1)))
+            .collect();
+
+        let mut filters = vec![vec![0.0f32; n_freqs]; bins];
+        for m in 1..=bins {
+            let left = bin_points[m - 1];
+            let center = bin_points[m];
+            let right = bin_points[m + 1];
+
+            if left >= right {
+                continue;
+            }
+
+            if center > left {
+                for k in left..center {
+                    filters[m - 1][k] = (k - left) as f32 / (center - left) as f32;
+                }
+            }
+            if right > center {
+                for k in center..right {
+                    filters[m - 1][k] = (right - k) as f32 / (right - center) as f32;
+                }
+            }
+        }
+        Some(filters)
+    }
+
+    fn power_spectrum(frame: &[f32]) -> Vec<f32> {
+        let n = frame.len();
+        let n_freqs = (n / 2) + 1;
+        let mut spectrum = vec![0.0f32; n_freqs];
+
+        for (k, bin) in spectrum.iter_mut().enumerate() {
+            let mut real = 0.0f32;
+            let mut imag = 0.0f32;
+            for (n_idx, &sample) in frame.iter().enumerate() {
+                let phase = 2.0 * std::f32::consts::PI * k as f32 * n_idx as f32 / n as f32;
+                real += sample * phase.cos();
+                imag -= sample * phase.sin();
+            }
+            *bin = (real * real + imag * imag) / n as f32;
+        }
+
+        spectrum
+    }
+
+    fn extract_log_mel_default(
+        waveform: &[f32],
+        sample_rate: u32,
+        frame_size: usize,
+        hop_size: usize,
+        bins: usize,
+    ) -> Option<(Vec<f32>, usize)> {
+        let (framed, frame_count) = Self::frame_waveform(waveform, frame_size, hop_size)?;
+        let filters = Self::mel_filter_bank(sample_rate, frame_size, bins)?;
+
+        let mut out = Vec::with_capacity(frame_count * bins);
+        let hann_den = (frame_size.saturating_sub(1)).max(1) as f32;
+
+        for i in 0..frame_count {
+            let start = i * frame_size;
+            let frame = &framed[start..start + frame_size];
+            let mut windowed = vec![0.0f32; frame_size];
+            for (idx, w) in windowed.iter_mut().enumerate() {
+                let hann = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * idx as f32 / hann_den).cos();
+                *w = frame[idx] * hann;
+            }
+
+            let spectrum = Self::power_spectrum(&windowed);
+            for filter in &filters {
+                let mut energy = 0.0f32;
+                for (bin_idx, weight) in filter.iter().enumerate() {
+                    energy += spectrum[bin_idx] * weight;
+                }
+                out.push((energy + 1e-6).ln());
+            }
+        }
+
+        Some((out, frame_count))
+    }
+
     fn prepare_runtime_input(
         &mut self,
         mono_window: &[f32],
@@ -370,14 +509,26 @@ impl OnnxMlPitchEngine {
                 let shape = vec![frame_count, frame_size];
                 (frames_data, shape)
             }
-            OnnxPrimaryInput::MelSpectrogram { bins } => {
-                let provider = self.feature_provider.as_mut()?;
-                let (mel, frames) = provider.extract_mel(
-                    mono_window,
-                    source_sample_rate,
-                    params.expected_sample_rate,
-                    bins,
-                )?;
+            OnnxPrimaryInput::MelSpectrogram { bins, frame_size } => {
+                let resampled =
+                    Self::resample_to_model_window(mono_window, source_sample_rate, params)?;
+                let extracted = if let Some(provider) = self.feature_provider.as_mut() {
+                    provider.extract_mel(
+                        &resampled,
+                        params.expected_sample_rate,
+                        params.expected_sample_rate,
+                        bins,
+                    )
+                } else {
+                    Self::extract_log_mel_default(
+                        &resampled,
+                        params.expected_sample_rate,
+                        frame_size,
+                        params.hop_size,
+                        bins,
+                    )
+                }?;
+                let (mel, frames) = extracted;
                 let shape = vec![1, frames, bins];
                 (mel, shape)
             }
@@ -494,6 +645,7 @@ impl MlPitchEngine for McLeodMlFallbackEngine {
             MlPitchModel::SwiftF0 => 1.0,
             MlPitchModel::Rmvpe => 0.98,
             MlPitchModel::Crepe => 0.95,
+            MlPitchModel::Fcpe => 0.98,
         };
 
         Some(MlPitchEstimate {
@@ -812,6 +964,44 @@ impl Default for CrepePitchDetector {
 }
 
 impl Analyzer for CrepePitchDetector {
+    fn analyze(
+        &mut self,
+        input: &[f32],
+        sample_rate: u32,
+        channels: usize,
+        out_events: &mut Vec<AnalysisEvent>,
+    ) {
+        self.inner.analyze(input, sample_rate, channels, out_events);
+    }
+}
+
+pub struct FcpePitchDetector {
+    inner: MlPitchDetector,
+}
+
+impl FcpePitchDetector {
+    pub fn new() -> Self {
+        Self {
+            inner: MlPitchDetector::new(MlPitchModel::Fcpe),
+        }
+    }
+
+    pub fn with_onnx(params: OnnxModelParams) -> Self {
+        let mut config = OnnxPitchConfig::empty();
+        config.fcpe = Some(params);
+        Self {
+            inner: MlPitchDetector::with_onnx(MlPitchModel::Fcpe, config),
+        }
+    }
+}
+
+impl Default for FcpePitchDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Analyzer for FcpePitchDetector {
     fn analyze(
         &mut self,
         input: &[f32],
