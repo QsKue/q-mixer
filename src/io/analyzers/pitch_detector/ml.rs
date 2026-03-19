@@ -42,6 +42,8 @@ pub struct OnnxModelParams {
     pub model_min_freq: f32,
     pub model_max_freq: f32,
     pub output_kind: OnnxOutputKind,
+    pub primary_input: OnnxPrimaryInput,
+    pub aux_scalar_inputs: Vec<OnnxScalarInput>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +56,25 @@ pub enum OnnxOutputKind {
 pub struct OnnxRawOutput {
     pub pitch: Vec<f32>,
     pub confidence: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum OnnxPrimaryInput {
+    Waveform1D,
+    MelSpectrogram { bins: usize },
+}
+
+#[derive(Debug, Clone)]
+pub struct OnnxScalarInput {
+    pub tensor_name: String,
+    pub value: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct OnnxRuntimeInput {
+    pub primary_shape: Vec<usize>,
+    pub primary_data: Vec<f32>,
+    pub scalar_inputs: Vec<OnnxScalarInput>,
 }
 
 impl OnnxModelParams {
@@ -69,21 +90,28 @@ impl OnnxModelParams {
             model_min_freq: 50.0,
             model_max_freq: 1_100.0,
             output_kind: OnnxOutputKind::DirectHz,
+            primary_input: OnnxPrimaryInput::Waveform1D,
+            aux_scalar_inputs: Vec::new(),
         }
     }
 
     pub fn for_rmvpe(model_path: impl Into<String>) -> Self {
         Self {
             model_path: model_path.into(),
-            input_tensor_name: "waveform".to_string(),
-            f0_output_tensor_name: "f0".to_string(),
-            confidence_output_tensor_name: Some("periodicity".to_string()),
+            input_tensor_name: "input_0".to_string(),
+            f0_output_tensor_name: "pitchf".to_string(),
+            confidence_output_tensor_name: None,
             expected_sample_rate: 16_000,
             expected_window_size: 1024,
             hop_size: 160,
             model_min_freq: 40.0,
             model_max_freq: 1_100.0,
             output_kind: OnnxOutputKind::DirectHz,
+            primary_input: OnnxPrimaryInput::MelSpectrogram { bins: 128 },
+            aux_scalar_inputs: vec![OnnxScalarInput {
+                tensor_name: "input_1".to_string(),
+                value: 0.006,
+            }],
         }
     }
 
@@ -99,11 +127,21 @@ impl OnnxModelParams {
             model_min_freq: 50.0,
             model_max_freq: 2_000.0,
             output_kind: OnnxOutputKind::DirectHz,
+            primary_input: OnnxPrimaryInput::Waveform1D,
+            aux_scalar_inputs: Vec::new(),
         }
     }
 
     pub fn with_output_kind(mut self, output_kind: OnnxOutputKind) -> Self {
         self.output_kind = output_kind;
+        self
+    }
+
+    pub fn with_aux_scalar_input(mut self, tensor_name: impl Into<String>, value: f32) -> Self {
+        self.aux_scalar_inputs.push(OnnxScalarInput {
+            tensor_name: tensor_name.into(),
+            value,
+        });
         self
     }
 }
@@ -134,14 +172,32 @@ impl OnnxPitchConfig {
 }
 
 pub trait OnnxRuntime {
-    fn infer(&mut self, _params: &OnnxModelParams, _mono_window: &[f32]) -> Option<OnnxRawOutput>;
+    fn infer(
+        &mut self,
+        _params: &OnnxModelParams,
+        _prepared_input: &OnnxRuntimeInput,
+    ) -> Option<OnnxRawOutput>;
+}
+
+pub trait OnnxFeatureProvider {
+    fn extract_mel(
+        &mut self,
+        _mono_window: &[f32],
+        _source_sample_rate: u32,
+        _expected_sample_rate: u32,
+        _mel_bins: usize,
+    ) -> Option<(Vec<f32>, usize)>;
 }
 
 #[derive(Default)]
 pub struct StubOnnxRuntime;
 
 impl OnnxRuntime for StubOnnxRuntime {
-    fn infer(&mut self, _params: &OnnxModelParams, _mono_window: &[f32]) -> Option<OnnxRawOutput> {
+    fn infer(
+        &mut self,
+        _params: &OnnxModelParams,
+        _prepared_input: &OnnxRuntimeInput,
+    ) -> Option<OnnxRawOutput> {
         None
     }
 }
@@ -149,6 +205,7 @@ impl OnnxRuntime for StubOnnxRuntime {
 pub struct OnnxMlPitchEngine {
     config: OnnxPitchConfig,
     runtime: Box<dyn OnnxRuntime>,
+    feature_provider: Option<Box<dyn OnnxFeatureProvider>>,
     fallback: McLeodMlFallbackEngine,
 }
 
@@ -161,8 +218,14 @@ impl OnnxMlPitchEngine {
         Self {
             config,
             runtime,
+            feature_provider: None,
             fallback: McLeodMlFallbackEngine::new(),
         }
+    }
+
+    pub fn with_feature_provider(mut self, feature_provider: Box<dyn OnnxFeatureProvider>) -> Self {
+        self.feature_provider = Some(feature_provider);
+        self
     }
 
     fn validate_input(params: &OnnxModelParams, mono_window: &[f32], sample_rate: u32) -> bool {
@@ -255,6 +318,38 @@ impl OnnxMlPitchEngine {
             }
         }
     }
+
+    fn prepare_runtime_input(
+        &mut self,
+        mono_window: &[f32],
+        source_sample_rate: u32,
+        params: &OnnxModelParams,
+    ) -> Option<OnnxRuntimeInput> {
+        let (primary_data, primary_shape) = match params.primary_input {
+            OnnxPrimaryInput::Waveform1D => {
+                let data = Self::resample_to_model_window(mono_window, source_sample_rate, params)?;
+                let shape = vec![1, data.len()];
+                (data, shape)
+            }
+            OnnxPrimaryInput::MelSpectrogram { bins } => {
+                let provider = self.feature_provider.as_mut()?;
+                let (mel, frames) = provider.extract_mel(
+                    mono_window,
+                    source_sample_rate,
+                    params.expected_sample_rate,
+                    bins,
+                )?;
+                let shape = vec![1, frames, bins];
+                (mel, shape)
+            }
+        };
+
+        Some(OnnxRuntimeInput {
+            primary_shape,
+            primary_data,
+            scalar_inputs: params.aux_scalar_inputs.clone(),
+        })
+    }
 }
 
 impl MlPitchEngine for OnnxMlPitchEngine {
@@ -271,19 +366,23 @@ impl MlPitchEngine for OnnxMlPitchEngine {
         max_freq: f32,
     ) -> Option<MlPitchEstimate> {
         let clamped = min_freq.max(1.0);
-        let params = self.config.get(model);
+        let params = self.config.get(model).cloned();
 
-        let onnx_estimate = params.and_then(|params| {
-            if !Self::validate_input(params, mono_window, sample_rate) {
-                return None;
+        let onnx_estimate = if let Some(params) = params {
+            if !Self::validate_input(&params, mono_window, sample_rate) {
+                None
+            } else {
+                let prepared = self.prepare_runtime_input(mono_window, sample_rate, &params);
+                prepared.and_then(|prepared| {
+                    let raw = self.runtime.infer(&params, &prepared)?;
+                    let estimate = Self::decode_output(&params, raw)?;
+                    (estimate.hz >= params.model_min_freq && estimate.hz <= params.model_max_freq)
+                        .then_some(estimate)
+                })
             }
-
-            let model_input = Self::resample_to_model_window(mono_window, sample_rate, params)?;
-            let raw = self.runtime.infer(params, &model_input)?;
-            let estimate = Self::decode_output(params, raw)?;
-            (estimate.hz >= params.model_min_freq && estimate.hz <= params.model_max_freq)
-                .then_some(estimate)
-        });
+        } else {
+            None
+        };
 
         let estimate = onnx_estimate.or_else(|| {
             self.fallback
